@@ -1,0 +1,56 @@
+{
+  "air": {
+    "display_name": "Air",
+    "hardness": 0,
+    "max_hp": 0,
+    "diggable": false,
+    "glyph": "none",
+    "palette_index": 0,
+    "ore": null
+  },
+  "dirt": {
+    "display_name": "Dirt",
+    "hardness": 1,
+    "max_hp": 20,
+    "diggable": true,
+    "glyph": "dots",
+    "palette_index": 3,
+    "ore": null
+  },
+  "rock": {
+    "display_name": "Rock",
+    "hardness": 2,
+    "max_hp": 60,
+    "diggable": true,
+    "glyph": "cross",
+    "palette_index": 5,
+    "ore": null
+  },
+  "hard_rock": {
+    "display_name": "Hard Rock",
+    "hardness": 4,
+    "max_hp": 140,
+    "diggable": true,
+    "glyph": "bricks",
+    "palette_index": 6,
+    "ore": null
+  },
+  "ore_copper": {
+    "display_name": "Copper Ore",
+    "hardness": 2,
+    "max_hp": 70,
+    "diggable": true,
+    "glyph": "circle",
+    "palette_index": 9,
+    "ore": { "value": 10 }
+  },
+  "ore_gold": {
+    "display_name": "Gold Ore",
+    "hardness": 3,
+    "max_hp": 110,
+    "diggable": true,
+    "glyph": "diamond",
+    "palette_index": 11,
+    "ore": { "value": 35 }
+  }
+}

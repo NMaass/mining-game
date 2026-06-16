@@ -1,0 +1,10 @@
+{
+  "blast_power": {
+    "display_name": "Blast Power",
+    "description": "Permanently increases every charge's blast intensity.",
+    "cost_prestige": 1,
+    "effect": "blast_intensity_mult",
+    "magnitude": 0.25,
+    "max_level": 5
+  }
+}

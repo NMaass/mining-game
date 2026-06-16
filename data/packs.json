@@ -1,0 +1,24 @@
+{
+  "basic": {
+    "display_name": "Basic Pack",
+    "price": 50,
+    "charge_count": 5,
+    "pity_every": 6,
+    "weights": {
+      "dynamite": 70,
+      "charge_sticky": 25,
+      "heavy_bomb": 5
+    }
+  },
+  "deep": {
+    "display_name": "Deep Pack",
+    "price": 140,
+    "charge_count": 6,
+    "pity_every": 4,
+    "weights": {
+      "dynamite": 40,
+      "charge_sticky": 40,
+      "heavy_bomb": 20
+    }
+  }
+}

@@ -1,0 +1,48 @@
+; Engine configuration file.
+; Mining Game — vertical slice (steps 1–3). Godot 4.6.x.
+; Tunables live in /data as schema-validated JSON; never hardcode balance.
+
+config_version=5
+
+[application]
+
+config/name="Mining Game (Vertical Slice)"
+config/description="Vertical slice: drag-aim + throw, destructible block level, finite run, money."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+boot_splash/show_image=false
+
+[autoload]
+
+GameData="*res://scripts/systems/game_data.gd"
+Audio="*res://scripts/systems/audio.gd"
+
+[audio]
+
+buses/default_bus_layout="res://default_bus_layout.tres"
+
+[display]
+
+window/size/viewport_width=720
+window/size/viewport_height=1280
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/handheld/orientation="portrait"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/gdUnit4/plugin.cfg")
+
+[physics]
+
+2d/physics_engine="Rapier2D"
+common/physics_ticks_per_second=60
+
+[gui]
+
+theme/default_font="res://art/fonts/PixelifySans.ttf"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

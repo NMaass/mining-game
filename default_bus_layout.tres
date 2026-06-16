@@ -1,0 +1,26 @@
+[gd_resource type="AudioBusLayout" format=3 uid="uid://daudiobus01"]
+
+; Audio bus layout for the slice (AC-5.13.2): Master → {SFX, Music}.
+; The §5.10 volume sliders drive the SFX and Music bus volumes independently
+; (Audio.set_sfx_volume_db / set_music_volume_db). Loaded automatically by Godot
+; from this default path and referenced explicitly in project.godot [audio].
+
+[resource]
+bus/0/name = "Master"
+bus/0/solo = false
+bus/0/mute = false
+bus/0/bypass_fx = false
+bus/0/volume_db = 0.0
+bus/0/send = "Master"
+bus/1/name = "SFX"
+bus/1/solo = false
+bus/1/mute = false
+bus/1/bypass_fx = false
+bus/1/volume_db = 0.0
+bus/1/send = "Master"
+bus/2/name = "Music"
+bus/2/solo = false
+bus/2/mute = false
+bus/2/bypass_fx = false
+bus/2/volume_db = 0.0
+bus/2/send = "Master"

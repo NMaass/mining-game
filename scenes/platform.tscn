@@ -1,0 +1,29 @@
+[gd_scene load_steps=3 format=3 uid="uid://dplatform01"]
+
+[ext_resource type="Script" path="res://scripts/systems/platform.gd" id="1_platform"]
+[ext_resource type="Texture2D" path="res://art/runtime/platform.png" id="2_platformtex"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_platform"]
+size = Vector2(144, 8)
+
+[node name="Platform" type="Node2D"]
+script = ExtResource("1_platform")
+
+[node name="Body" type="StaticBody2D" parent="."]
+collision_layer = 4
+collision_mask = 2
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Body"]
+position = Vector2(0, -4)
+shape = SubResource("RectangleShape2D_platform")
+
+[node name="Visual" type="Sprite2D" parent="Body"]
+position = Vector2(0, -4)
+texture = ExtResource("2_platformtex")
+
+[node name="Muzzle" type="Marker2D" parent="Body"]
+position = Vector2(0, 16)
+
+[node name="Camera" type="Camera2D" parent="."]
+position_smoothing_enabled = true
+position_smoothing_speed = 4.0

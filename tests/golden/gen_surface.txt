@@ -1,0 +1,16 @@
+dirt,ore_copper,ore_copper,ore_copper,ore_copper,dirt,dirt
+ore_copper,rock,rock,rock,rock,ore_copper,dirt
+ore_gold,rock,rock,rock,rock,rock,ore_copper
+rock,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock
+ore_copper,ore_copper,ore_gold,rock,rock,rock,rock
+dirt,dirt,dirt,dirt,ore_copper,ore_copper,rock
+dirt,dirt,dirt,dirt,dirt,ore_copper,ore_gold
+dirt,dirt,dirt,dirt,dirt,dirt,ore_copper
+dirt,dirt,dirt,dirt,dirt,dirt,ore_copper
+dirt,dirt,dirt,dirt,dirt,dirt,dirt
+dirt,dirt,dirt,dirt,dirt,dirt,ore_copper
+dirt,dirt,dirt,dirt,dirt,dirt,ore_copper
+dirt,dirt,dirt,dirt,dirt,dirt,ore_gold
+ore_gold,ore_copper,dirt,dirt,ore_copper,ore_copper,rock
+rock,rock,ore_gold,ore_gold,rock,rock,rock

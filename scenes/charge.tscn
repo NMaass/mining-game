@@ -1,0 +1,21 @@
+[gd_scene load_steps=3 format=3 uid="uid://dcharge01"]
+
+[ext_resource type="Script" path="res://scripts/systems/charge.gd" id="1_charge"]
+[ext_resource type="Texture2D" path="res://art/runtime/charge.png" id="2_chargetex"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_charge"]
+radius = 12.0
+
+[node name="Charge" type="RigidBody2D"]
+collision_layer = 2
+collision_mask = 5
+continuous_cd = 1
+contact_monitor = true
+max_contacts_reported = 4
+script = ExtResource("1_charge")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("2_chargetex")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_charge")

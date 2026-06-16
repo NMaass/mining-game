@@ -1,0 +1,17 @@
+{
+  "source": "Brighter, cheerful Diggin-adjacent palette. Colorblind-safe via strong luminance spread + overlay glyph shapes. Blocks reference a color by palette_index; the overlay glyph layer carries non-color shape identity.",
+  "colors": [
+    "#0e1116",
+    "#3d2e20",
+    "#7a5530",
+    "#d4a36a",
+    "#4a9080",
+    "#c8d0d8",
+    "#5a6a7a",
+    "#8a6fc0",
+    "#4a9fd0",
+    "#e06020",
+    "#7ad0f0",
+    "#ffe066"
+  ]
+}

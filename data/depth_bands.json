@@ -1,0 +1,24 @@
+[
+  {
+    "id": "band_surface",
+    "min_depth_cells": 0,
+    "max_depth_cells": 40,
+    "block_weights": {
+      "dirt": 60,
+      "rock": 28,
+      "ore_copper": 10,
+      "ore_gold": 2
+    }
+  },
+  {
+    "id": "band_deep",
+    "min_depth_cells": 40,
+    "max_depth_cells": 9999,
+    "block_weights": {
+      "rock": 45,
+      "hard_rock": 30,
+      "ore_copper": 15,
+      "ore_gold": 10
+    }
+  }
+]

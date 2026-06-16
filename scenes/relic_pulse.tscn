@@ -1,0 +1,17 @@
+[gd_scene load_steps=2 format=3 uid="uid://drelicpulse01"]
+
+[ext_resource type="Texture2D" path="res://art/runtime/explosion_particle.png" id="1_pulsetex"]
+
+[node name="RelicPulse" type="CPUParticles2D"]
+emitting = false
+amount = 24
+one_shot = true
+explosiveness = 0.8
+texture = ExtResource("1_pulsetex")
+spread = 180.0
+gravity = Vector2(0, 0)
+initial_velocity_min = 40.0
+initial_velocity_max = 90.0
+scale_amount_min = 0.8
+scale_amount_max = 1.6
+color = Color(0.7, 0.4, 0.95, 1)

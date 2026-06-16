@@ -1,0 +1,23 @@
+# Godot 4 generated
+/.godot/
+/.cache_dl/
+
+# gdUnit4 test reports
+/reports/
+
+# Exports / builds
+/export/
+/builds/
+*.tmp
+
+# OS
+.DS_Store
+
+# Local Claude/agent session artifacts (workflows are tracked)
+/.claude/settings.local.json
+/.claude/logs/
+/.claude/bin/
+/.claude/launchd/
+/.claude/weekly-loop-*
+/.reeval-backup/
+/.salvage-backup/

@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3 uid="uid://dexplosion01"]
+
+[ext_resource type="Texture2D" path="res://art/runtime/explosion_particle.png" id="1_explosiontex"]
+
+[sub_resource type="Gradient" id="Gradient_explosion"]
+offsets = PackedFloat32Array(0, 0.5, 1)
+colors = PackedColorArray(1, 0.95, 0.5, 1, 1, 0.55, 0.2, 0.9, 0.4, 0.15, 0.1, 0)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_explosion"]
+gradient = SubResource("Gradient_explosion")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_explosion"]
+particle_flag_disable_z = true
+emission_shape = 1
+emission_sphere_radius = 8.0
+direction = Vector3(0, -1, 0)
+spread = 180.0
+initial_velocity_min = 120.0
+initial_velocity_max = 260.0
+gravity = Vector3(0, 320, 0)
+scale_min = 2.0
+scale_max = 4.0
+color_ramp = SubResource("GradientTexture1D_explosion")
+
+[node name="Explosion" type="GPUParticles2D"]
+emitting = false
+amount = 28
+lifetime = 0.5
+one_shot = true
+explosiveness = 0.9
+texture = ExtResource("1_explosiontex")
+process_material = SubResource("ParticleProcessMaterial_explosion")

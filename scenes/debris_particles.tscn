@@ -1,0 +1,18 @@
+[gd_scene load_steps=2 format=3 uid="uid://ddebris01"]
+
+[ext_resource type="Texture2D" path="res://art/runtime/debris_particle.png" id="1_debristex"]
+
+[node name="DebrisParticles" type="CPUParticles2D"]
+emitting = false
+amount = 6
+one_shot = true
+explosiveness = 0.9
+lifetime_randomness = 0.3
+texture = ExtResource("1_debristex")
+spread = 120.0
+gravity = Vector2(0, 200)
+initial_velocity_min = 60.0
+initial_velocity_max = 140.0
+scale_amount_min = 0.6
+scale_amount_max = 1.2
+color = Color(0.8, 0.7, 0.6, 1)

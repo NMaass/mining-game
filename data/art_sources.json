@@ -1,0 +1,14 @@
+{
+  "terrain": {
+    "source_path": "res://art/runtime/Mine_Bright.png",
+    "tile_px": 8,
+    "credit_id": "kevin_moms_house_mine_pico_platformer_tileset",
+    "block_tiles": {
+      "dirt": [10, 2],
+      "rock": [7, 2],
+      "hard_rock": [6, 5],
+      "ore_copper": [18, 2],
+      "ore_gold": [18, 3]
+    }
+  }
+}
