@@ -6,5 +6,21 @@
     "effect": "blast_intensity_mult",
     "magnitude": 0.25,
     "max_level": 5
+  },
+  "mining_torch": {
+    "display_name": "Mining Torch",
+    "description": "Increases headlamp light radius.",
+    "cost_prestige": 1,
+    "effect": "light_radius_mult",
+    "magnitude": 0.25,
+    "max_level": 4
+  },
+  "charge_holster": {
+    "display_name": "Charge Holster",
+    "description": "Reduces throw cooldown.",
+    "cost_prestige": 1,
+    "effect": "throw_cooldown_mult",
+    "magnitude": -0.1,
+    "max_level": 3
   }
 }

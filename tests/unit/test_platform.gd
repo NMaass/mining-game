@@ -340,3 +340,70 @@ func test_muzzle_position_derives_from_authored_marker() -> void:
 	# AC-5.3.9: the muzzle sits BELOW the platform target (positive local y) so a default
 	# downward throw spawns under the platform body and enters the mine, never resting on it.
 	assert_float(p.muzzle_position().y).is_greater(p.platform_target_position().y)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MANUAL ELEVATOR MOVES (Wave 4: big blocky HUD arrows move the platform)
+# ══════════════════════════════════════════════════════════════════════════════
+
+func test_can_move_up_false_at_top() -> void:
+	var p := _make_platform(0)
+	assert_bool(p.can_move_up()).is_false()
+
+func test_can_move_down_false_at_bottom() -> void:
+	var bottom: int = Registry.mine_height_cells(_tables) - 1
+	var p := _make_platform(bottom)
+	assert_bool(p.can_move_down()).is_false()
+
+func test_move_up_clamps_at_top() -> void:
+	var p := _make_platform(0)
+	assert_bool(p.move_up()).is_false()
+	assert_int(p.target_row).is_equal(0)
+
+func test_move_down_clamps_at_bottom() -> void:
+	var bottom: int = Registry.mine_height_cells(_tables) - 1
+	var p := _make_platform(bottom)
+	assert_bool(p.move_down()).is_false()
+	assert_int(p.target_row).is_equal(bottom)
+
+func test_move_down_stops_at_mine_height_minus_one() -> void:
+	var mine_h: int = Registry.mine_height_cells(_tables)
+	assert_int(mine_h).is_greater(1)
+	var p := _make_platform(mine_h - 2)
+	assert_bool(p.move_down()).is_true()
+	assert_int(p.target_row).is_equal(mine_h - 1)
+	assert_bool(p.move_down()).is_false()
+	assert_int(p.target_row).is_equal(mine_h - 1)
+
+func test_move_up_then_down_returns_to_start() -> void:
+	var p := _make_platform(1)
+	assert_bool(p.move_up()).is_true()
+	assert_int(p.target_row).is_equal(0)
+	assert_bool(p.move_down()).is_true()
+	assert_int(p.target_row).is_equal(1)
+
+func test_manual_move_emits_descended_signal() -> void:
+	var p := _make_platform(0)
+	var monitor := monitor_signals(p)
+	p.move_down()
+	await assert_signal(monitor).is_emitted("descended", [1])
+
+func test_manual_move_tweens_target_not_snap() -> void:
+	# AC-5.7.2: manual elevator movement reuses the descent tween path.
+	var p := _make_platform(0)
+	var body := p.get_node("Body") as Node2D
+	var start_y: float = body.position.y
+	p.move_down()
+	var target_y: float = p.platform_target_position().y
+	assert_float(target_y).is_greater(start_y)
+	assert_float(body.position.y).is_less(target_y)
+
+func test_manual_move_reanchors_camera() -> void:
+	# AC-5.7.3: the camera target follows the new platform target after a manual move.
+	var p := _make_platform(0)
+	p.move_down()
+	var pt: Vector2 = p.platform_target_position()
+	var ct: Vector2 = p.camera_target_position()
+	var cell: int = Registry.block_pixel_size(_tables)
+	var lookahead: int = Registry.camera_lookahead_cells(_tables)
+	assert_float(ct.x).is_equal(pt.x)
+	assert_float(ct.y).is_equal(pt.y + float(lookahead * cell))

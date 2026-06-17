@@ -51,10 +51,24 @@ func test_dead_zone_no_change() -> void:
 	assert_float(angle).is_equal(current)
 
 func test_angle_clamped() -> void:
-	# AC-5.3.1: an extreme drag is clamped to the valid (non-upward) range.
+	# AC-5.3.1: an extreme drag is clamped to the valid range.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(500, 100))
 	assert_bool(angle <= Aim.MAX_ANGLE).is_true()
 	assert_bool(angle >= Aim.MIN_ANGLE).is_true()
+
+func test_shallow_upward_drag_clamps_to_max() -> void:
+	# An upward-right drag steeper than MAX_ANGLE clamps to MAX_ANGLE.
+	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(150, 0))
+	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
+
+func test_shallow_upward_drag_clamps_to_min() -> void:
+	# A nearly-horizontal/left drag with shallow upward component clamps to MIN_ANGLE.
+	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(0, 0))
+	assert_float(angle).is_equal_approx(Aim.MIN_ANGLE, 0.001)
+
+func test_default_angle_is_straight_down() -> void:
+	# The default launch angle is 0.0 radians = straight down.
+	assert_float(Aim.DEFAULT_ANGLE).is_equal(0.0)
 
 # ── angle_to_direction ──────────────────────────────────────────────────────
 
@@ -267,3 +281,34 @@ func test_throw_blocked_only_while_in_flight() -> void:
 	assert_bool(tc.commit_throw()).is_false()
 	tc.set_can_throw(true)
 	assert_bool(tc.commit_throw()).is_true()
+
+func test_throw_blocked_during_cooldown() -> void:
+	# v0.5: a 2s throw cooldown prevents spamming; commit is rejected while cooling.
+	var tc: ThrowControls = auto_free(ThrowControls.new())
+	tc.start_cooldown(1.0)
+	assert_bool(tc.can_throw()).is_false()
+	assert_bool(tc.commit_throw()).is_false()
+
+func test_cooldown_expires_and_allows_throw() -> void:
+	# v0.5: advancing the cooldown eventually re-enables throwing.
+	var tc: ThrowControls = auto_free(ThrowControls.new())
+	tc.start_cooldown(0.5)
+	assert_bool(tc.can_throw()).is_false()
+	tc.advance_cooldown(0.25)
+	assert_bool(tc.can_throw()).is_false()
+	tc.advance_cooldown(0.3)
+	assert_bool(tc.can_throw()).is_true()
+	assert_bool(tc.commit_throw()).is_true()
+
+func test_cooldown_progress_and_text() -> void:
+	# v0.5: cooldown exposes progress [0,1] and countdown text for the UI fill.
+	var tc: ThrowControls = auto_free(ThrowControls.new())
+	tc.start_cooldown(2.0)
+	assert_float(tc.cooldown_progress).is_equal(0.0)
+	assert_str(tc.cooldown_text).contains("2.0")
+	tc.advance_cooldown(1.0)
+	assert_float(tc.cooldown_progress).is_equal(0.5)
+	assert_str(tc.cooldown_text).contains("1.0")
+	tc.advance_cooldown(1.0)
+	assert_float(tc.cooldown_progress).is_equal(1.0)
+	assert_str(tc.cooldown_text).is_empty()

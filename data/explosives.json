@@ -12,9 +12,9 @@
     "detonation_mode": "on_first_impact",
     "fuse_seconds": 0.0,
     "sticky": false,
-    "blast_radius_cells": 1,
+    "blast_radius_cells": 2,
     "blast_intensity": 25,
-    "blast_falloff": [1.0, 0.3]
+    "blast_falloff": [1.0, 0.55, 0.35]
   },
   "dynamite": {
     "display_name": "Dynamite",
@@ -66,5 +66,56 @@
     "blast_radius_cells": 3,
     "blast_intensity": 170,
     "blast_falloff": [1.0, 0.75, 0.5, 0.25]
+  },
+  "cluster_bomb": {
+    "display_name": "Cluster Bomb",
+    "tier": 1,
+    "rarity": "common",
+    "free": false,
+    "efficiency": 1.8,
+    "mass": 1.0,
+    "bounce": 0.35,
+    "friction": 0.6,
+    "base_impulse": 520.0,
+    "detonation_mode": "fuse_seconds",
+    "fuse_seconds": 1.0,
+    "sticky": false,
+    "blast_radius_cells": 2,
+    "blast_intensity": 60,
+    "blast_falloff": [1.0, 0.55, 0.2]
+  },
+  "pile_driver": {
+    "display_name": "Pile Driver",
+    "tier": 3,
+    "rarity": "rare",
+    "free": false,
+    "efficiency": 3.8,
+    "mass": 2.0,
+    "bounce": 0.05,
+    "friction": 0.8,
+    "base_impulse": 720.0,
+    "detonation_mode": "on_first_impact",
+    "fuse_seconds": 0.0,
+    "sticky": false,
+    "blast_radius_cells": 1,
+    "blast_intensity": 240,
+    "blast_falloff": [1.0, 0.45]
+  },
+  "drill_charge": {
+    "display_name": "Drill Charge",
+    "tier": 2,
+    "rarity": "uncommon",
+    "free": false,
+    "efficiency": 2.8,
+    "mass": 0.9,
+    "bounce": 0.1,
+    "friction": 0.7,
+    "base_impulse": 480.0,
+    "detonation_mode": "on_rest",
+    "fuse_seconds": 0.0,
+    "sticky": true,
+    "blast_radius_cells": 2,
+    "blast_intensity": 130,
+    "blast_falloff": [1.0, 0.7, 0.4]
   }
 }

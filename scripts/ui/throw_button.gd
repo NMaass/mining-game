@@ -31,6 +31,10 @@ var _slot_count: int = 1
 ## Whether a throw can currently be committed (false while a charge is in flight).
 var _can_throw: bool = true
 
+## Cooldown state (v0.5): seconds remaining and total for the current cooldown.
+var _cooldown_remaining: float = 0.0
+var _cooldown_total: float = 0.0
+
 # ── Public state ───────────────────────────────────────────────────────────
 
 ## The currently selected tray slot index.
@@ -53,6 +57,38 @@ func set_slot_count(count: int) -> void:
 func set_can_throw(value: bool) -> void:
 	_can_throw = value
 
+## Start a throw cooldown of `seconds`. The button is disabled until it expires.
+func start_cooldown(seconds: float) -> void:
+	_cooldown_total = maxf(seconds, 0.0)
+	_cooldown_remaining = _cooldown_total
+
+## Advance the cooldown timer by `delta`. Returns true if the cooldown expired
+## this tick (so the view can refresh button state once).
+func advance_cooldown(delta: float) -> bool:
+	if _cooldown_remaining <= 0.0:
+		return false
+	_cooldown_remaining = maxf(_cooldown_remaining - delta, 0.0)
+	return _cooldown_remaining <= 0.0
+
+## Whether the throw button is currently in a cooldown window.
+var is_cooling_down: bool:
+	get:
+		return _cooldown_remaining > 0.0
+
+## Cooldown progress in [0, 1]: 0 = just started, 1 = finished.
+var cooldown_progress: float:
+	get:
+		if _cooldown_total <= 0.0:
+			return 1.0
+		return clampf(1.0 - (_cooldown_remaining / _cooldown_total), 0.0, 1.0)
+
+## Human-readable countdown text (e.g. "1.2s"), or "" when ready.
+var cooldown_text: String:
+	get:
+		if _cooldown_remaining <= 0.0:
+			return ""
+		return "%.1fs" % _cooldown_remaining
+
 # ── Tray selection (AC-5.3.6) — shared tap path (AC-5.3.7) ─────────────────
 
 ## Select a tray slot by index. Out-of-range taps are ignored (the selection is
@@ -69,17 +105,17 @@ func select_slot(index: int) -> int:
 
 # ── Throw commit (AC-5.3.3) ────────────────────────────────────────────────
 
-## Whether a throw can be committed right now. Always true except while a charge is
-## already in flight — there is no empty-tray block (AC-5.3.8): the free slot is
-## always throwable.
+## Whether a throw can be committed right now. True only when no charge is in
+## flight AND the throw cooldown has expired. There is no empty-tray block
+## (AC-5.3.8): the free slot is always throwable once the cooldown ends.
 func can_throw() -> bool:
-	return _can_throw
+	return _can_throw and _cooldown_remaining <= 0.0
 
 ## Commit the active charge. Emits `throw_requested(selected_index)` so the view
 ## spawns it. Returns true if a throw was committed, false if currently blocked
-## (charge in flight). Never blocked by an empty tray (AC-5.3.8).
+## (charge in flight or on cooldown). Never blocked by an empty tray (AC-5.3.8).
 func commit_throw() -> bool:
-	if not _can_throw:
+	if not can_throw():
 		return false
 	throw_requested.emit(_selected_index)
 	return true

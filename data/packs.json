@@ -1,6 +1,6 @@
 {
   "basic": {
-    "display_name": "Basic Pack",
+    "display_name": "Rusty Crate",
     "price": 50,
     "charge_count": 5,
     "pity_every": 6,
@@ -19,6 +19,17 @@
       "dynamite": 40,
       "charge_sticky": 40,
       "heavy_bomb": 20
+    }
+  },
+  "heavy_crate": {
+    "display_name": "Heavy Crate",
+    "price": 260,
+    "charge_count": 4,
+    "pity_every": 3,
+    "weights": {
+      "cluster_bomb": 45,
+      "drill_charge": 35,
+      "pile_driver": 20
     }
   }
 }

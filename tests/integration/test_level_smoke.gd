@@ -1194,3 +1194,172 @@ func test_depth_bump_callable_without_crash() -> void:
 	mine.hud.bump_depth()
 	var depth_label: Label = mine.hud.get_node("Top/DepthBox/Depth")
 	assert_str(depth_label.text).is_equal("Depth 7")
+
+# ── Throw cooldown HUD wiring (v0.5) ───────────────────────────────────────────
+
+func test_throw_starts_cooldown_and_disables_button() -> void:
+	# v0.5: after throw_at, the ThrowControls cooldown is live and the HUD reflects it:
+	# the throw button is disabled and the cooldown label shows a countdown.
+	var mine := _boot_mine()
+	mine.select_charge(Registry.free_charge_id(_tables))
+	var button: Button = mine.get_node("Hud/Bottom/ThrowButton")
+	var label: Label = mine.get_node("Hud/Bottom/ThrowButton/CooldownLabel")
+	assert_bool(button.disabled).is_false()  # ready before throw
+
+	var charge: Charge = mine.throw_at(0.0)
+	assert_object(charge).is_not_null()
+
+	# Button disabled by charge-in-flight + cooldown; label shows remaining time.
+	assert_bool(button.disabled).is_true()
+	assert_str(label.text).is_not_empty()
+	assert_str(label.text).contains(".")
+
+func test_cooldown_expires_and_re_enables_button() -> void:
+	# v0.5: advancing the cooldown (or waiting it out) re-enables the throw button.
+	var mine := _boot_mine()
+	mine.select_charge(Registry.free_charge_id(_tables))
+	var button: Button = mine.get_node("Hud/Bottom/ThrowButton")
+	var charge: Charge = mine.throw_at(0.0)
+	assert_object(charge).is_not_null()
+	assert_bool(button.disabled).is_true()
+
+	# Detonate the charge so only the cooldown remains blocking the button.
+	charge.on_impact()
+	await await_idle_frame()
+
+	# Advance the cooldown in one big tick to finish it.
+	var cooldown_s: float = Registry.balance(_tables, "throw_cooldown_seconds", 2.0)
+	mine._process(cooldown_s + 0.1)
+
+	assert_bool(button.disabled).is_false()
+
+# ── Shop modal (buy packs with odds + affordability) ───────────────────────────
+
+func test_shop_modal_is_authored_and_lists_packs() -> void:
+	# The Shop modal is part of the authored mine scene and lists the configured
+	# packs with display names, prices, and derived odds.
+	var mine := _boot_mine()
+	var shop: ShopModal = mine.get_node_or_null("ShopModal")
+	assert_object(shop).override_failure_message("mine.tscn is missing the ShopModal").is_not_null()
+
+	mine._on_buy_pack_button()
+	assert_bool(shop.visible).is_true()
+	assert_bool(get_tree().paused).is_true()
+
+	var title: Label = shop.get_node("Panel/Box/Title")
+	assert_str(title.text).is_equal("SHOP")
+
+	# Rusty Crate (basic) — $50, odds Dynamite 70%, Sticky Charge 25%, Heavy Bomb 5%.
+	var basic_entry: Control = shop.get_node_or_null("Panel/Box/EntriesContainer/Entry_basic")
+	assert_object(basic_entry).is_not_null()
+	var basic_title: Label = basic_entry.get_node("Title")
+	var basic_price: Label = basic_entry.get_node("Price")
+	assert_str(basic_title.text).is_equal("Rusty Crate")
+	assert_str(basic_price.text).is_equal("$50")
+	var basic_odds: Control = basic_entry.get_node("Odds")
+	assert_str((basic_odds.get_child(0) as Label).text).contains("Dynamite")
+	assert_str((basic_odds.get_child(0) as Label).text).contains("70%")
+	assert_str((basic_odds.get_child(1) as Label).text).contains("Sticky Charge")
+	assert_str((basic_odds.get_child(1) as Label).text).contains("25%")
+	assert_str((basic_odds.get_child(2) as Label).text).contains("Heavy Bomb")
+	assert_str((basic_odds.get_child(2) as Label).text).contains("5%")
+
+	# Heavy Crate — $260, odds Cluster Bomb 45%, Drill Charge 35%, Pile Driver 20%.
+	var heavy_entry: Control = shop.get_node_or_null("Panel/Box/EntriesContainer/Entry_heavy_crate")
+	assert_object(heavy_entry).is_not_null()
+	assert_str(heavy_entry.get_node("Title").text).is_equal("Heavy Crate")
+	assert_str(heavy_entry.get_node("Price").text).is_equal("$260")
+	var heavy_odds: Control = heavy_entry.get_node("Odds")
+	assert_str((heavy_odds.get_child(0) as Label).text).contains("Cluster Bomb")
+	assert_str((heavy_odds.get_child(0) as Label).text).contains("45%")
+	assert_str((heavy_odds.get_child(1) as Label).text).contains("Drill Charge")
+	assert_str((heavy_odds.get_child(1) as Label).text).contains("35%")
+	assert_str((heavy_odds.get_child(2) as Label).text).contains("Pile Driver")
+	assert_str((heavy_odds.get_child(2) as Label).text).contains("20%")
+
+	shop.close()
+	assert_bool(get_tree().paused).is_false()
+
+func test_shop_buy_affordable_pack_grants_charges_and_rejects_unaffordable() -> void:
+	# Starting money (50) is exactly the basic pack price, so it is affordable; the
+	# heavy crate (260) is not. Buying the affordable pack grants finite charges,
+	# plays the pack-open cue, and closes the modal.
+	var mine := _boot_mine()
+	var shop: ShopModal = mine.get_node_or_null("ShopModal")
+	mine._on_buy_pack_button()
+
+	var basic_btn: Button = shop.get_node("Panel/Box/EntriesContainer/Entry_basic/Buy_basic")
+	var heavy_btn: Button = shop.get_node("Panel/Box/EntriesContainer/Entry_heavy_crate/Buy_heavy_crate")
+	assert_bool(basic_btn.disabled).is_false()
+	assert_bool(heavy_btn.disabled).is_true()
+
+	var money_before: int = mine.economy.money
+	var finite_before: int = mine.run_state.finite_count()
+	var audio_before: int = Audio.play_count
+
+	basic_btn.pressed.emit()
+
+	assert_int(mine.economy.money).is_equal(money_before - 50)
+	assert_int(mine.run_state.finite_count()).is_greater(finite_before)
+	assert_int(Audio.play_count).is_greater(audio_before)  # pack_open cue fired
+	assert_bool(shop.visible).is_false()
+	assert_bool(get_tree().paused).is_false()
+
+	# With 0 money left, buying the heavy crate is rejected and money stays 0.
+	assert_bool(mine.buy_pack("heavy_crate")).is_false()
+	assert_int(mine.economy.money).is_equal(0)
+
+# ── Elevator controls (Wave 4: manual platform movement) ───────────────────────
+
+func test_elevator_buttons_exist_in_authored_scene() -> void:
+	# Wave 4: the authored HUD contains the big blocky up/down arrow buttons.
+	var mine := _boot_mine()
+	assert_object(mine.get_node_or_null("Hud/ElevatorControls")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/ElevatorControls/ElevatorUp")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/ElevatorControls/ElevatorDown")).is_not_null()
+
+func test_elevator_down_moves_platform_and_updates_depth() -> void:
+	# Wave 4: pressing the down arrow moves the platform one row deeper and updates
+	# the run-state depth readout (same as auto-descent).
+	var mine := _boot_mine()
+	var platform: Platform = mine.platform
+	var start_row: int = platform.target_row
+	var up: Button = mine.get_node("Hud/ElevatorControls/ElevatorUp")
+	var down: Button = mine.get_node("Hud/ElevatorControls/ElevatorDown")
+
+	mine._on_elevator_down()
+	assert_int(platform.target_row).is_equal(start_row + 1)
+	assert_int(mine.run_state.depth).is_equal(platform.target_row)
+	# The up arrow is now enabled (we left row 0), and down remains enabled until bottom.
+	assert_bool(up.disabled).is_false()
+
+func test_elevator_up_moves_platform_back_to_top() -> void:
+	# Wave 4: after moving down, pressing up returns the platform toward the surface.
+	var mine := _boot_mine()
+	var platform: Platform = mine.platform
+	mine._on_elevator_down()
+	var row_after_down: int = platform.target_row
+	mine._on_elevator_up()
+	assert_int(platform.target_row).is_equal(row_after_down - 1)
+	assert_int(mine.run_state.depth).is_equal(platform.target_row)
+
+func test_elevator_buttons_gray_at_top_and_bottom_limits() -> void:
+	# Wave 4: the up arrow is disabled at row 0; the down arrow is disabled at the
+	# bottom row of the mine.
+	var mine := _boot_mine()
+	var up: Button = mine.get_node("Hud/ElevatorControls/ElevatorUp")
+	var down: Button = mine.get_node("Hud/ElevatorControls/ElevatorDown")
+
+	# At the top: up disabled, down enabled.
+	mine._refresh_all_ui()
+	assert_bool(up.disabled).is_true()
+	assert_bool(down.disabled).is_false()
+
+	# Move to the bottom of the mine.
+	var bottom: int = Registry.mine_height_cells(_tables) - 1
+	for i in range(bottom):
+		mine._on_elevator_down()
+	mine._refresh_all_ui()
+	assert_int(mine.platform.target_row).is_equal(bottom)
+	assert_bool(up.disabled).is_false()
+	assert_bool(down.disabled).is_true()

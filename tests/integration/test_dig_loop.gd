@@ -312,6 +312,24 @@ func test_buy_upgrade_requires_banked_prestige() -> void:
 	var up_id: String = Registry.prestige_upgrade_ids(_tables)[0]
 	assert_bool(run.buy_upgrade(up_id)).is_false()
 
+func test_buy_mining_torch_increases_effective_light_radius() -> void:
+	# AC-5.6.4: buying Mining Torch raises the effective light radius used by the dig view.
+	var run := _make_run()
+	var base: float = Registry.effective_light_radius(_tables, run.prestige)
+	run.collect_relic()  # bank prestige
+	assert_bool(run.buy_upgrade("mining_torch")).is_true()
+	run.start_dig()
+	assert_float(Registry.effective_light_radius(_tables, run.prestige)).is_greater(base)
+
+func test_buy_charge_holster_decreases_effective_throw_cooldown() -> void:
+	# AC-5.6.4: buying Charge Holster lowers the effective throw cooldown used by the dig.
+	var run := _make_run()
+	var base: float = Registry.effective_throw_cooldown(_tables, run.prestige)
+	run.collect_relic()  # bank prestige
+	assert_bool(run.buy_upgrade("charge_holster")).is_true()
+	run.start_dig()
+	assert_float(Registry.effective_throw_cooldown(_tables, run.prestige)).is_less(base)
+
 func test_buy_upgrade_makes_next_dig_stronger() -> void:
 	# AC-5.6.4: after buying a prestige upgrade, a measurable dig stat improves.
 	var run := _make_run()

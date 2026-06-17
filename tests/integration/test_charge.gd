@@ -44,6 +44,13 @@ func _make_charge(explosive_id: String, spawn: Vector2, bps: int = 64) -> Array:
 	)
 	return [charge, capture]
 
+# Build a fake platform body for impact tests (collision layer 4 + platform group).
+func _make_platform_body() -> StaticBody2D:
+	var body := StaticBody2D.new()
+	body.collision_layer = 4
+	body.add_to_group("platform")
+	return auto_free(body)
+
 # ── Spawn / launch (AC-5.3.3) ──────────────────────────────────────────────
 
 func test_setup_configures_rigid_body() -> void:
@@ -161,6 +168,34 @@ func test_sticky_on_rest_detonates_after_freeze_delay() -> void:
 	var charge: Charge = made[0]
 	var capture: Dictionary = made[1]
 	charge.on_impact()  # freezes, arms ~0.15s delay
+	assert_bool(capture["fired"]).is_false()
+	charge.step(0.2)
+	assert_bool(capture["fired"]).is_true()
+
+func test_sticky_ignores_platform_during_grace() -> void:
+	# AC-5.4.2 / platform-grace fix: a sticky charge spawned beneath the platform
+	# must NOT freeze or detonate if it brushes the launcher within the grace window.
+	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
+	var charge: Charge = made[0]
+	var capture: Dictionary = made[1]
+	var platform: StaticBody2D = _make_platform_body()
+
+	# First platform contact during grace: completely ignored.
+	charge.on_impact(platform)
+	assert_bool(charge.freeze).is_false()
+	assert_bool(capture["fired"]).is_false()
+	assert_bool(charge.has_impacted).is_false()
+
+	# Still inside the 0.18s window: repeated platform contacts are still no-ops.
+	charge.step(0.1)
+	charge.on_impact(platform)
+	assert_bool(charge.freeze).is_false()
+	assert_bool(capture["fired"]).is_false()
+
+	# Grace expired: platform contact now freezes and arms the sticky fuse.
+	charge.step(0.1)
+	charge.on_impact(platform)
+	assert_bool(charge.freeze).is_true()
 	assert_bool(capture["fired"]).is_false()
 	charge.step(0.2)
 	assert_bool(capture["fired"]).is_true()

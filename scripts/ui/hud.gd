@@ -22,6 +22,10 @@ extends CanvasLayer
 signal nav_pressed
 ## Emitted when the player presses the prominent "End Dig" / "Prestige" button.
 signal end_dig_pressed
+## Emitted when the elevator "up" arrow is pressed.
+signal elevator_up_pressed
+## Emitted when the elevator "down" arrow is pressed.
+signal elevator_down_pressed
 
 # Internal layout spacing (presentation detail, not game balance): the gap between the
 # control bars and surrounding chrome, and how far the bottom background extends behind
@@ -39,6 +43,9 @@ const _NAV_RESERVE := 220.0  # horizontal room kept for the top-right buttons
 @onready var _top_right: Control = get_node_or_null("TopRight")
 @onready var _nav_button: Button = get_node_or_null("TopRight/NavButton")
 @onready var _end_dig_button: Button = get_node_or_null("TopRight/EndDigButton")
+@onready var _elevator_controls: Control = get_node_or_null("ElevatorControls")
+@onready var _elevator_up: Button = get_node_or_null("ElevatorControls/ElevatorUp")
+@onready var _elevator_down: Button = get_node_or_null("ElevatorControls/ElevatorDown")
 @onready var _bottom: Control = get_node_or_null("Bottom")
 @onready var _bottom_bg: Control = get_node_or_null("BottomBg")
 ## Full-screen flash overlay (authored in mine.tscn, modulate.a = 0 at rest) — the relic/prestige
@@ -75,6 +82,10 @@ func _ready() -> void:
 		_nav_button.pressed.connect(_on_nav_pressed)
 	if _end_dig_button != null and not _end_dig_button.pressed.is_connected(_on_end_dig_pressed):
 		_end_dig_button.pressed.connect(_on_end_dig_pressed)
+	if _elevator_up != null and not _elevator_up.pressed.is_connected(_on_elevator_up_pressed):
+		_elevator_up.pressed.connect(_on_elevator_up_pressed)
+	if _elevator_down != null and not _elevator_down.pressed.is_connected(_on_elevator_down_pressed):
+		_elevator_down.pressed.connect(_on_elevator_down_pressed)
 	# Reflow when the window/viewport resizes (portrait aspect range — AC-5.8.6).
 	var vp := get_viewport()
 	if vp != null and not vp.size_changed.is_connected(apply_layout):
@@ -95,6 +106,14 @@ func _on_nav_pressed() -> void:
 
 func _on_end_dig_pressed() -> void:
 	end_dig_pressed.emit()
+
+
+func _on_elevator_up_pressed() -> void:
+	elevator_up_pressed.emit()
+
+
+func _on_elevator_down_pressed() -> void:
+	elevator_down_pressed.emit()
 
 
 ## Show/hide the prominent "End Dig" / "Prestige" button. When visible the button reads
@@ -142,6 +161,15 @@ func apply_layout_with(window_px: Vector2i, safe_px: Rect2i, logical: Vector2i) 
 		# Let the container right-align its children.
 		_top_right.alignment = BoxContainer.ALIGNMENT_END
 
+	# Elevator controls (up/down arrows), flush-right and vertically centered.
+	if _elevator_controls != null:
+		var elevator_size: Vector2 = _elevator_controls.get_combined_minimum_size()
+		var w: float = maxf(elevator_size.x, min_touch)
+		var h: float = maxf(elevator_size.y, min_touch * 2.0)
+		var right: float = float(logical.x) - insets["right"] - margin
+		var center_y: float = float(logical.y) / 2.0
+		_set_rect(_elevator_controls, right - w, center_y - h * 0.5, right, center_y + h * 0.5)
+
 	# Bottom control bar (tray + throw + pack), its BOTTOM edge above the bottom inset.
 	if _bottom != null:
 		var bottom_h: float = maxf(min_touch, 72.0) + _BAR_PAD
@@ -171,7 +199,7 @@ func _set_rect(c: Control, left: float, top: float, right: float, bottom: float)
 ## Size every interactive control to at least the data-driven thumb-safe minimum (AC-5.8.5).
 func _enforce_touch_targets() -> void:
 	var m: float = _min_touch()
-	for b: Button in [_nav_button, _end_dig_button]:
+	for b: Button in [_nav_button, _end_dig_button, _elevator_up, _elevator_down]:
 		if b != null:
 			b.custom_minimum_size = Vector2(maxf(b.custom_minimum_size.x, m), maxf(b.custom_minimum_size.y, m))
 

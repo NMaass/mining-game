@@ -18,6 +18,12 @@ func _make_tray() -> TrayUi:
 	tray.configure({})
 	return tray
 
+func _make_tray_with_tables() -> TrayUi:
+	var tray: TrayUi = auto_free(TrayScript.new())
+	add_child(tray)
+	tray.configure(GameData.tables)
+	return tray
+
 func test_free_slot_first_and_infinite_label() -> void:
 	# AC-5.8.1 / AC-5.8.2: the free charge is the first slot; its count renders as ∞, while a
 	# finite charge shows a numeric "xN" count.
@@ -48,6 +54,50 @@ func test_selected_slot_indicated_by_border_and_elevation_not_color() -> void:
 	# NOT color: the background color is the SAME for selected and unselected (so color carries
 	# no information — only the border/elevation does).
 	assert_bool(sel_sb.bg_color.is_equal_approx(free_sb.bg_color)).is_true()
+
+func test_common_slot_uses_common_rarity_color() -> void:
+	# AC-5.8.2 / AC-5.10.2: rarity may be shown by border tint, but the selection signal
+	# itself remains non-color. A common charge's slot border uses the common rarity color.
+	GameData.load_all()
+	var tray := _make_tray_with_tables()
+	tray.rebuild([{"id": "dynamite", "count": 3}], "dynamite")
+	var sb := (tray.get_child(0) as Button).get_theme_stylebox("normal") as StyleBoxFlat
+	var expected: Color = Registry.rarity_color(GameData.tables, "common")
+	assert_object(sb).is_not_null()
+	assert_bool(sb.border_color.is_equal_approx(expected)).is_true()
+
+func test_uncommon_and_rare_slots_use_rarity_color() -> void:
+	# Rarity colors flow from data/rarity.json through Registry.rarity_color to the slot border.
+	GameData.load_all()
+	var tray := _make_tray_with_tables()
+	tray.rebuild([
+		{"id": "charge_sticky", "count": 2},  # uncommon
+		{"id": "heavy_bomb", "count": 1},     # rare
+	], "charge_sticky")
+	var uncommon_sb := (tray.get_child(0) as Button).get_theme_stylebox("normal") as StyleBoxFlat
+	var rare_sb := (tray.get_child(1) as Button).get_theme_stylebox("normal") as StyleBoxFlat
+	assert_bool(uncommon_sb.border_color.is_equal_approx(Registry.rarity_color(GameData.tables, "uncommon"))).is_true()
+	assert_bool(rare_sb.border_color.is_equal_approx(Registry.rarity_color(GameData.tables, "rare"))).is_true()
+
+func test_selected_slot_keeps_non_color_border_and_elevation_cue_with_rarity_colors() -> void:
+	# Even when rarity colors are present on the border, the SELECTED slot is still
+	# distinguished by a thicker border (shape) and raised elevation (position), and the
+	# background color is identical — so selection never relies on color alone.
+	GameData.load_all()
+	var tray := _make_tray_with_tables()
+	tray.rebuild([
+		{"id": "dynamite", "count": 3},       # common, unselected
+		{"id": "charge_sticky", "count": 2},  # uncommon, selected
+	], "charge_sticky")
+	var unsel_btn := tray.get_child(0) as Button
+	var sel_btn := tray.get_child(1) as Button
+	var unsel_sb := unsel_btn.get_theme_stylebox("normal") as StyleBoxFlat
+	var sel_sb := sel_btn.get_theme_stylebox("normal") as StyleBoxFlat
+	assert_object(unsel_sb).is_not_null()
+	assert_object(sel_sb).is_not_null()
+	assert_int(sel_sb.border_width_left).is_greater(unsel_sb.border_width_left)
+	assert_float(sel_btn.position.y).is_less(unsel_btn.position.y)
+	assert_bool(sel_sb.bg_color.is_equal_approx(unsel_sb.bg_color)).is_true()
 
 func test_tier_glyph_scales_with_tier() -> void:
 	# AC-5.10.2: each tray charge shows a non-color TIER glyph (◆ pips) that scales with tier,

@@ -58,10 +58,25 @@ func buy_upgrade(upgrade_id: String) -> bool:
 ## purchased "blast_intensity_mult" upgrades. 1.0 with no upgrades; each purchased
 ## level adds the upgrade's magnitude (AC-5.6.4: measurably stronger next dig).
 func blast_intensity_mult() -> float:
+	return _effect_mult("blast_intensity_mult")
+
+## Multiplier applied to the base light radius (Mining Torch upgrade).
+## 1.0 with no upgrades; each level adds the upgrade's magnitude.
+func light_radius_mult() -> float:
+	return _effect_mult("light_radius_mult")
+
+## Multiplier applied to the base throw cooldown (Charge Holster upgrade).
+## Negative magnitudes reduce cooldown; result is clamped to a small positive floor
+## so the cooldown can never reach zero.
+func throw_cooldown_mult() -> float:
+	return _effect_mult("throw_cooldown_mult")
+
+## Sum the per-level magnitudes for a given prestige effect id.
+func _effect_mult(effect_id: String) -> float:
 	var mult: float = 1.0
 	for id in Registry.prestige_upgrade_ids(_tables):
 		var up: Dictionary = Registry.prestige_upgrade(_tables, id)
-		if str(up.get("effect", "")) == "blast_intensity_mult":
+		if str(up.get("effect", "")) == effect_id:
 			mult += float(up.get("magnitude", 0.0)) * float(level(id))
 	return mult
 
@@ -70,6 +85,15 @@ func blast_intensity_mult() -> float:
 ## more damage after a prestige purchase (AC-5.6.4).
 func dig_blast_intensity(base_intensity: int) -> int:
 	return int(floor(float(base_intensity) * blast_intensity_mult()))
+
+## Effective throw cooldown after Charge Holster. Clamped to a minimum of 0.2s
+## so the UI never divides by zero and spam is still gated.
+func dig_throw_cooldown(base_cooldown: float) -> float:
+	return maxf(0.2, base_cooldown * throw_cooldown_mult())
+
+## Effective light radius after Mining Torch.
+func dig_light_radius(base_radius: float) -> float:
+	return maxf(0.0, base_radius * light_radius_mult())
 
 # ── Save/restore (U20 / AC-5.11.1) ─────────────────────────────────────────────
 

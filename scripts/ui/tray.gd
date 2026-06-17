@@ -76,7 +76,7 @@ func set_selected(charge_id: String, motion: float = 1.0) -> void:
 		var b := children[i] as Button
 		if b == null:
 			continue
-		_style_slot(b, i == sel_index)
+		_style_slot(b, _slot_ids[i], i == sel_index)
 	var sel_btn := children[sel_index] as Button
 	if sel_btn == null:
 		return
@@ -120,16 +120,17 @@ func _make_slot_button(charge_id: String, count: int, is_selected: bool) -> Butt
 	var tier_glyph: String = "◆".repeat(tier)
 	b.text = "%s\n%s  %s" % [label, count_text, tier_glyph]
 	b.clip_text = true
-	_style_slot(b, is_selected)
+	_style_slot(b, charge_id, is_selected)
 	b.pressed.connect(_on_slot_pressed.bind(charge_id))
 	return b
 
 
 ## Apply the non-color SELECTION cue (AC-5.8.2 / AC-5.10.2) to a slot button: a thick border (shape)
-## + a slight upward elevation on the selected slot; a thin border + ground level otherwise. No
-## color-only signalling (the bg color is identical for both). Shared by rebuild + set_selected so the
+## + a slight upward elevation on the selected slot; a thin border + ground level otherwise. The
+## border is TINTED by the charge's data-driven rarity color, but selected vs unselected is still
+## conveyed by thickness + elevation, never by color alone. Shared by rebuild + set_selected so the
 ## selected/unselected look is identical whether the row was rebuilt or only the selection changed.
-func _style_slot(b: Button, is_selected: bool) -> void:
+func _style_slot(b: Button, charge_id: String, is_selected: bool) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.16, 0.16, 0.2)
 	var border: int = 4 if is_selected else 1
@@ -137,7 +138,8 @@ func _style_slot(b: Button, is_selected: bool) -> void:
 	sb.border_width_right = border
 	sb.border_width_top = border
 	sb.border_width_bottom = border
-	sb.border_color = Color(0.95, 0.95, 0.95)
+	var rarity: String = str(Registry.explosive(_tables, charge_id).get("rarity", ""))
+	sb.border_color = Registry.rarity_color(_tables, rarity)
 	b.add_theme_stylebox_override("normal", sb)
 	b.add_theme_stylebox_override("hover", sb)
 	b.position.y = -6.0 if is_selected else 0.0  # elevation cue

@@ -57,10 +57,15 @@ const EXPLOSION_MOTION_FLOOR := 0.12
 @onready var _hud: Hud = get_node_or_null("Hud")
 @onready var _tray: TrayUi = get_node_or_null("Hud/Bottom/TrayScroll/Tray")
 @onready var _throw_button: Button = get_node_or_null("Hud/Bottom/ThrowButton")
+@onready var _cooldown_fill: ColorRect = get_node_or_null("Hud/Bottom/ThrowButton/CooldownFill")
+@onready var _cooldown_label: Label = get_node_or_null("Hud/Bottom/ThrowButton/CooldownLabel")
 @onready var _buy_pack_button: Button = get_node_or_null("Hud/Bottom/BuyPackButton")
+@onready var _elevator_up: Button = get_node_or_null("Hud/ElevatorControls/ElevatorUp")
+@onready var _elevator_down: Button = get_node_or_null("Hud/ElevatorControls/ElevatorDown")
 @onready var _dig_end_panel: DigEndPanel = get_node_or_null("Hud/DigEndPanel")
 @onready var _overlay: SettingsOverlay = get_node_or_null("Overlay")
 @onready var _prestige_offer: PrestigeOffer = get_node_or_null("PrestigeOffer")
+@onready var _shop_modal: ShopModal = get_node_or_null("ShopModal")
 
 # ── Systems (delegated logic; no Node deps) ───────────────────────────────────
 var _tables: Dictionary
@@ -68,6 +73,7 @@ var _grid: BlockGrid
 var _economy: Economy
 var _run_state: RunState
 var _aim: AimController
+var _throw_controls: ThrowControls
 var _save: SaveManager
 var _settings: SettingsState
 
@@ -168,6 +174,7 @@ func boot() -> void:
 	_build_atlas_mapping()
 	_apply_generated_art()
 	_wire_aim()
+	_wire_throw_controls()
 	_wire_ui()
 	_wire_overlay()
 	_wire_world_guides()
@@ -236,6 +243,12 @@ func _wire_aim() -> void:
 		_aim.angle_changed.connect(_on_aim_angle_changed)
 
 
+func _wire_throw_controls() -> void:
+	_throw_controls = ThrowControls.new()
+	_throw_controls.name = "ThrowControls"
+	add_child(_throw_controls)
+
+
 func _wire_ui() -> void:
 	if _hud != null:
 		# Data-driven safe-area + touch-target layout (AC-5.8.5); reflows on resize.
@@ -246,6 +259,14 @@ func _wire_ui() -> void:
 		# Big "End Dig" button mirrors the prestige offer for mouse/touch parity.
 		if not _hud.end_dig_pressed.is_connected(_on_end_dig_pressed):
 			_hud.end_dig_pressed.connect(_on_end_dig_pressed)
+		# Elevator arrows manually move the platform up/down.
+		if not _hud.elevator_up_pressed.is_connected(_on_elevator_up):
+			_hud.elevator_up_pressed.connect(_on_elevator_up)
+		if not _hud.elevator_down_pressed.is_connected(_on_elevator_down):
+			_hud.elevator_down_pressed.connect(_on_elevator_down)
+	if _platform != null:
+		if not _platform.descended.is_connected(_on_platform_descended):
+			_platform.descended.connect(_on_platform_descended)
 	if _tray != null:
 		_tray.configure(_tables)
 		if not _tray.slot_selected.is_connected(_on_tray_slot_selected):
@@ -266,6 +287,10 @@ func _wire_ui() -> void:
 			_prestige_offer.accepted.connect(_on_prestige_accepted)
 		if not _prestige_offer.declined.is_connected(_on_prestige_declined):
 			_prestige_offer.declined.connect(_on_prestige_declined)
+	if _shop_modal != null:
+		_shop_modal.configure(_tables, func() -> int: return _economy.money)
+		if not _shop_modal.buy_pressed.is_connected(_on_shop_buy_pressed):
+			_shop_modal.buy_pressed.connect(_on_shop_buy_pressed)
 
 
 ## Bind the modal Settings overlay (AC-5.8.3) to the shared SettingsState and listen for changes.
@@ -282,7 +307,7 @@ func _wire_world_guides() -> void:
 	if _light_mask != null:
 		var mat := _light_mask.material as ShaderMaterial
 		if mat != null:
-			mat.set_shader_parameter("radius_px", Registry.light_radius_px(_tables))
+			mat.set_shader_parameter("radius_px", Registry.effective_light_radius(_tables, _run_state.prestige))
 			mat.set_shader_parameter("softness_px", Registry.light_softness_px(_tables))
 			mat.set_shader_parameter("dim_alpha", Registry.light_dim_alpha(_tables))
 			# Warm/cool headlamp: the unlit mine fades toward a cool atmospheric tint, not
@@ -312,6 +337,30 @@ func _on_end_dig_pressed() -> void:
 				_run_state.prestige.blast_intensity_mult(), _motion_intensity())
 		if _aim != null:
 			_aim.set_enabled(false)
+	_refresh_all_ui()
+
+
+## Elevator up arrow pressed: move the platform up one row (clamped to the mine top).
+func _on_elevator_up() -> void:
+	if _platform == null:
+		return
+	if _platform.move_up():
+		_run_state.depth = _platform.target_row
+		_refresh_all_ui()
+
+
+## Elevator down arrow pressed: move the platform down one row (clamped to mine bottom).
+func _on_elevator_down() -> void:
+	if _platform == null:
+		return
+	if _platform.move_down():
+		_run_state.depth = _platform.target_row
+		_refresh_all_ui()
+
+
+## Platform target row changed (auto-descent or manual elevator move): refresh UI so the
+## elevator arrows gray at the top/bottom limits and the depth readout stays in sync.
+func _on_platform_descended(_new_row: int) -> void:
 	_refresh_all_ui()
 
 
@@ -557,6 +606,12 @@ func _squash_throw_button() -> void:
 		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
+## Returns the effective throw cooldown for this dig, reduced by the Charge Holster prestige
+## upgrade (AC-5.6.4). Centralized so the cooldown start and any UI readout use the same value.
+func _throw_cooldown_seconds() -> float:
+	return Registry.effective_throw_cooldown(_tables, _run_state.prestige)
+
+
 ## Throw the selected charge at `angle`. Spawns it as a Rapier RigidBody at the muzzle
 ## (AC-5.3.3). The free charge is never decremented (RunState.throw — AC-5.4.3). Returns
 ## the spawned Charge, or null if a charge is already in flight / the dig ended.
@@ -579,6 +634,8 @@ func throw_at(angle: float) -> Charge:
 	# before. Co-located with the visual launch pop below.
 	Audio.play_throw()  # AC-5.13.1
 	_active_charge = charge
+	if _throw_controls != null:
+		_throw_controls.start_cooldown(_throw_cooldown_seconds())
 	# LAUNCH POP: a muzzle flash at the launch point + a platform-deck recoil opposite the throw.
 	# Both are cosmetic, capped/ttl-freed, and gated on motion intensity (motion 0 → no flash/kick).
 	_spawn_muzzle_flash(angle)
@@ -673,7 +730,8 @@ func _on_tray_slot_selected(charge_id: String) -> void:
 
 
 func _on_buy_pack_button() -> void:
-	buy_pack("basic")
+	if _shop_modal != null:
+		_shop_modal.open(_motion_intensity())
 
 
 ## Buy a pack by id (AC-5.12.2). Delegates to RunState (debit + grant). Refreshes the UI.
@@ -683,6 +741,14 @@ func buy_pack(pack_id: String) -> bool:
 		Audio.play_pack_open()  # AC-5.13.1
 		_refresh_all_ui()
 	return ok
+
+
+## A pack was bought from the shop modal: play the cue (already inside buy_pack), close
+## the modal, and refresh the UI. If the buy is rejected (shouldn't happen when the button
+## is disabled), leave the modal open so the player can pick something else.
+func _on_shop_buy_pressed(pack_id: String) -> void:
+	if buy_pack(pack_id) and _shop_modal != null:
+		_shop_modal.close()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DETONATION → BLAST → CREDIT → DESCENT
@@ -1152,6 +1218,22 @@ func _spawn_explosion(center_cell: Vector2i, radius: int = 1) -> void:
 var _animate_money_next_refresh: bool = false
 
 
+## Reflect the throw-cooldown state on the button fill + countdown label. The fill grows from the
+## bottom (1 - progress at the top, full height when done) and is hidden when the cooldown ends.
+func _update_cooldown_visual() -> void:
+	if _throw_controls == null:
+		return
+	var cooling: bool = _throw_controls.is_cooling_down
+	if _cooldown_fill != null:
+		_cooldown_fill.visible = cooling
+		# progress 0 → full grey overlay; progress 1 → no overlay (fill scaled to 0 from bottom).
+		var p: float = _throw_controls.cooldown_progress
+		_cooldown_fill.anchor_top = 1.0 - p
+	if _cooldown_label != null:
+		_cooldown_label.text = _throw_controls.cooldown_text
+		_cooldown_label.visible = cooling
+
+
 func _refresh_all_ui() -> void:
 	if _hud != null:
 		# Money: ROLL on the live credit path (v0.5 juice), SNAP everywhere else. set_money stays the
@@ -1168,12 +1250,17 @@ func _refresh_all_ui() -> void:
 		_hud.set_depth_odds(Registry.band_odds(_tables, depth))
 	_rebuild_tray()
 	if _throw_button != null:
-		_throw_button.disabled = (_run_state.dig_ended or _active_charge != null)
+		var can_throw: bool = _throw_controls.can_throw() if _throw_controls != null else (_active_charge == null)
+		_throw_button.disabled = (_run_state.dig_ended or not can_throw)
+	_update_cooldown_visual()
 	if _buy_pack_button != null:
-		_buy_pack_button.disabled = (
-			_run_state.dig_ended
-			or not _economy.can_afford(int(Registry.pack(_tables, "basic").get("price", 0)))
-		)
+		# The bottom button now opens the shop modal, not a direct purchase, so it only
+		# locks when the dig has ended.
+		_buy_pack_button.disabled = _run_state.dig_ended
+	if _elevator_up != null:
+		_elevator_up.disabled = (_platform == null) or (not _platform.can_move_up())
+	if _elevator_down != null:
+		_elevator_down.disabled = (_platform == null) or (not _platform.can_move_down())
 	# One-shot: consumed so a non-credit refresh always snaps the canonical money label.
 	_animate_money_next_refresh = false
 
@@ -1234,6 +1321,9 @@ func _physics_process(_delta: float) -> void:
 func _process(delta: float) -> void:
 	_update_light_mask()
 	_animate_aim_line(delta)
+	if _throw_controls != null and _throw_controls.advance_cooldown(delta):
+		_update_cooldown_visual()
+		_refresh_all_ui()
 
 func _update_light_mask() -> void:
 	if _light_mask == null:

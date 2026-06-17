@@ -968,7 +968,7 @@ static func _check_prestige(prestige: Variant, errors: Array) -> void:
 	if ups.is_empty():
 		errors.append("prestige: registry is empty (need at least one power-growth upgrade)")
 		return
-	var known_effects := ["blast_intensity_mult"]
+	var known_effects := ["blast_intensity_mult", "light_radius_mult", "throw_cooldown_mult"]
 	for id in ups.keys():
 		var up: Variant = ups[id]
 		if not (up is Dictionary):
@@ -979,9 +979,14 @@ static func _check_prestige(prestige: Variant, errors: Array) -> void:
 				errors.append("prestige[%s]: missing '%s'" % [id, k])
 		if int(up.get("cost_prestige", 0)) <= 0:
 			errors.append("prestige[%s]: cost_prestige must be > 0" % id)
-		if float(up.get("magnitude", 0.0)) <= 0.0:
+		var effect: String = str(up.get("effect", ""))
+		var mag: float = float(up.get("magnitude", 0.0))
+		if effect == "throw_cooldown_mult":
+			if mag >= 0.0:
+				errors.append("prestige[%s]: throw_cooldown_mult magnitude must be < 0 (a reduction)" % id)
+		elif mag <= 0.0:
 			errors.append("prestige[%s]: magnitude must be > 0" % id)
 		if int(up.get("max_level", 0)) <= 0:
 			errors.append("prestige[%s]: max_level must be > 0" % id)
-		if up.has("effect") and not known_effects.has(str(up.get("effect", ""))):
-			errors.append("prestige[%s]: unknown effect '%s' (known: %s)" % [id, str(up.get("effect", "")), str(known_effects)])
+		if up.has("effect") and not known_effects.has(effect):
+			errors.append("prestige[%s]: unknown effect '%s' (known: %s)" % [id, effect, str(known_effects)])

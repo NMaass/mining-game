@@ -18,9 +18,9 @@ extends RefCounted
 const DEAD_ZONE_PX := 10.0
 
 ## Angle clamp range (radians). 0 = straight down, -PI/2 = left, PI/2 = right.
-## We allow aiming from far-left to far-right but not upward.
-const MIN_ANGLE := -PI / 2.0 + 0.1  # ~-1.47 rad (nearly horizontal left)
-const MAX_ANGLE := PI / 2.0 - 0.1   # ~1.47 rad (nearly horizontal right)
+## Aiming is allowed slightly past horizontal, including shallow upward angles.
+const MIN_ANGLE := -PI / 2.0 - 0.35  # ~-1.92 rad (shallow upward left)
+const MAX_ANGLE := PI / 2.0 + 0.35   # ~1.92 rad (shallow upward right)
 
 ## Default angle (straight down).
 const DEFAULT_ANGLE := 0.0

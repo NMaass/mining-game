@@ -112,6 +112,19 @@ static func has_explosive(tables: Dictionary, id: String) -> bool:
 static func explosive_ids(tables: Dictionary) -> Array:
 	return tables.get("explosives", {}).keys()
 
+# ── Rarity colors ───────────────────────────────────────────────────────────
+
+## Returns the configured Color for a rarity label (e.g. "common"), read from
+## data/rarity.json. Falls back to neutral gray if the rarity is unknown or the
+## table/colors entry is missing/invalid.
+static func rarity_color(tables: Dictionary, rarity: String) -> Color:
+	var colors: Variant = tables.get("rarity", {}).get("colors", {})
+	if colors is Dictionary and (colors as Dictionary).has(rarity):
+		var hex: String = str((colors as Dictionary)[rarity])
+		if Color.html_is_valid(hex):
+			return Color.html(hex)
+	return Color(0.5, 0.5, 0.5, 1.0)
+
 # ── Pack lookup ─────────────────────────────────────────────────────────────
 
 ## Returns the pack definition dict for the given id, or {} if unknown.
@@ -230,6 +243,17 @@ static func light_dark_tint(tables: Dictionary) -> Color:
 	if not Color.html_is_valid(hex):
 		return Color(0, 0, 0, 1)
 	return Color.html(hex)
+
+static func throw_cooldown_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "throw_cooldown_seconds", 0.0))
+
+## Effective throw cooldown after prestige Charge Holster upgrades.
+static func effective_throw_cooldown(tables: Dictionary, prestige: Prestige) -> float:
+	return prestige.dig_throw_cooldown(throw_cooldown_seconds(tables))
+
+## Effective headlamp light radius after prestige Mining Torch upgrades.
+static func effective_light_radius(tables: Dictionary, prestige: Prestige) -> float:
+	return prestige.dig_light_radius(light_radius_px(tables))
 
 # ── Portrait HUD layout (U10 / AC-5.8.5) ──────────────────────────────────────
 ## Minimum interactive-control edge (pixels) for thumb-safe touch targets. The HUD

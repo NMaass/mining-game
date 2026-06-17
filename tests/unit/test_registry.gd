@@ -27,7 +27,7 @@ func test_block_returns_expected_fields() -> void:
 	var dirt: Dictionary = Registry.block(_tables, "dirt")
 	assert_str(dirt.get("display_name", "")).is_equal("Dirt")
 	assert_int(int(dirt.get("hardness", -1))).is_equal(1)
-	assert_int(int(dirt.get("max_hp", -1))).is_equal(20)
+	assert_int(int(dirt.get("max_hp", -1))).is_equal(12)
 	assert_bool(dirt.get("diggable", false) as bool).is_true()
 	assert_int(int(dirt.get("palette_index", -1))).is_equal(3)
 
@@ -39,7 +39,7 @@ func test_block_ore_value() -> void:
 	assert_int(Registry.block_ore_value(_tables, "air")).is_equal(0)
 
 func test_block_max_hp() -> void:
-	assert_int(Registry.block_max_hp(_tables, "dirt")).is_equal(20)
+	assert_int(Registry.block_max_hp(_tables, "dirt")).is_equal(12)
 	assert_int(Registry.block_max_hp(_tables, "rock")).is_equal(60)
 	assert_int(Registry.block_max_hp(_tables, "hard_rock")).is_equal(140)
 	assert_int(Registry.block_max_hp(_tables, "air")).is_equal(0)
@@ -181,7 +181,7 @@ func test_balance_values() -> void:
 	assert_int(Registry.starting_money(_tables)).is_equal(50)
 	assert_int(Registry.run_seed(_tables)).is_equal(1337)
 	assert_int(Registry.crack_stages(_tables)).is_equal(3)
-	assert_float(Registry.camera_zoom(_tables)).is_equal(2.2)
+	assert_float(Registry.camera_zoom(_tables)).is_equal(3.2)
 
 func test_light_dark_tint_resolves_hex() -> void:
 	# v0.5 arcade pass: the headlamp mask fades toward a cool deep-terrain tint (not pure black).
@@ -197,6 +197,38 @@ func test_max_hp_consistent_with_block() -> void:
 		var from_accessor: int = Registry.block_max_hp(_tables, id)
 		var from_dict: int = int(Registry.block(_tables, id).get("max_hp", 0))
 		assert_int(from_accessor).is_equal(from_dict)
+
+# ── Prestige-effective balance accessors (AC-5.6.4) ─────────────────────────
+
+func test_throw_cooldown_seconds_from_data() -> void:
+	# AC-5.6.4: the raw balance value is exposed for callers that need the base.
+	assert_float(Registry.throw_cooldown_seconds(_tables)).is_equal(2.0)
+
+func test_effective_light_radius_no_prestige_equals_base() -> void:
+	# AC-5.6.4: with no Mining Torch purchases the effective radius equals the base data value.
+	var prestige := Prestige.new(_tables)
+	assert_float(Registry.effective_light_radius(_tables, prestige)).is_equal(Registry.light_radius_px(_tables))
+
+func test_effective_throw_cooldown_no_prestige_equals_base() -> void:
+	# AC-5.6.4: with no Charge Holster purchases the effective cooldown equals the base data value.
+	var prestige := Prestige.new(_tables)
+	assert_float(Registry.effective_throw_cooldown(_tables, prestige)).is_equal(Registry.throw_cooldown_seconds(_tables))
+
+func test_effective_light_radius_increases_with_mining_torch() -> void:
+	# AC-5.6.4: buying Mining Torch increases the effective light radius.
+	var prestige := Prestige.new(_tables)
+	prestige.bank(10)
+	var base: float = Registry.effective_light_radius(_tables, prestige)
+	assert_bool(prestige.buy_upgrade("mining_torch")).is_true()
+	assert_float(Registry.effective_light_radius(_tables, prestige)).is_greater(base)
+
+func test_effective_throw_cooldown_decreases_with_charge_holster() -> void:
+	# AC-5.6.4: buying Charge Holster decreases the effective throw cooldown.
+	var prestige := Prestige.new(_tables)
+	prestige.bank(10)
+	var base: float = Registry.effective_throw_cooldown(_tables, prestige)
+	assert_bool(prestige.buy_upgrade("charge_holster")).is_true()
+	assert_float(Registry.effective_throw_cooldown(_tables, prestige)).is_less(base)
 
 # ── HP-scaling accessors (AC-5.2.1, AC-5.5.4) ───────────────────────────────
 

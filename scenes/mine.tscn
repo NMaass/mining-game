@@ -1,4 +1,4 @@
-[gd_scene load_steps=24 format=3 uid="uid://dmine001"]
+[gd_scene load_steps=26 format=3 uid="uid://dmine001"]
 
 [ext_resource type="Script" path="res://scripts/ui/mine.gd" id="1_mine"]
 [ext_resource type="PackedScene" uid="uid://dblockgrid01" path="res://scenes/block_grid.tscn" id="2_grid"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://scripts/ui/prestige_offer.gd" id="9_prestigeoffer"]
 [ext_resource type="Shader" path="res://shaders/light_radius.gdshader" id="10_lightradius"]
 [ext_resource type="FontFile" path="res://art/fonts/PixelifySans.ttf" id="11_pixelfont"]
+[ext_resource type="PackedScene" uid="uid://shopmodal01" path="res://scenes/shop_modal.tscn" id="12_shopmodal"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/money.png" id="12_iconmoney"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/depth.png" id="13_icondepth"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/relic.png" id="14_iconrelic"]
@@ -94,6 +95,22 @@ border_width_top = 2
 border_width_right = 2
 border_width_bottom = 4
 border_color = Color(0.45, 0.48, 0.55, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_elevator_disabled"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.32, 0.32, 0.35, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 4
+border_color = Color(0.42, 0.42, 0.45, 1)
 corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_left = 8
@@ -242,6 +259,35 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
+[node name="ElevatorControls" type="VBoxContainer" parent="Hud"]
+offset_left = 640.0
+offset_top = 560.0
+offset_right = 704.0
+offset_bottom = 720.0
+theme_override_constants/separation = 12
+
+[node name="ElevatorUp" type="Button" parent="Hud/ElevatorControls"]
+layout_mode = 2
+custom_minimum_size = Vector2(64, 64)
+text = "▲"
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_elevator_disabled")
+
+[node name="ElevatorDown" type="Button" parent="Hud/ElevatorControls"]
+layout_mode = 2
+custom_minimum_size = Vector2(64, 64)
+text = "▼"
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 36
+theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_elevator_disabled")
+
 [node name="BottomBg" type="Panel" parent="Hud"]
 mouse_filter = 2
 offset_top = 1150.0
@@ -275,9 +321,39 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_primarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_primarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_primarybtn_hover")
 
+[node name="CooldownFill" type="ColorRect" parent="Hud/Bottom/ThrowButton"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.6, 0.6, 0.65, 0.55)
+
+[node name="CooldownLabel" type="Label" parent="Hud/Bottom/ThrowButton"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -20.0
+offset_top = -12.0
+offset_right = 20.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 24
+text = ""
+
 [node name="BuyPackButton" type="Button" parent="Hud/Bottom"]
 custom_minimum_size = Vector2(120, 72)
-text = "PACK"
+text = "SHOP"
 theme_override_fonts/font = ExtResource("11_pixelfont")
 theme_override_font_sizes/font_size = 20
 theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
@@ -427,3 +503,6 @@ theme_override_font_sizes/font_size = 24
 theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
+
+[node name="ShopModal" parent="." instance=ExtResource("12_shopmodal")]
+visible = false

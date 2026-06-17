@@ -307,6 +307,44 @@ func try_descend(hp_grid: Dictionary) -> int:
 	return steps
 
 
+## True iff the platform can be manually moved up one row (not already at the top).
+func can_move_up() -> bool:
+	return _target_row > 0
+
+
+## True iff the platform can be manually moved down one row (not already at the bottom).
+func can_move_down() -> bool:
+	var bottom: int = Registry.mine_height_cells(_tables) - 1
+	return _target_row < bottom
+
+
+## Manually move the platform up by one row. Clamps to 0, tweens + re-anchors the
+## camera via the same path as auto-descent, and emits `descended(_target_row)`.
+## Returns true if the row actually changed.
+func move_up() -> bool:
+	if not can_move_up():
+		return false
+	_target_row -= 1
+	_tween_to_target()
+	_reanchor_camera()
+	descended.emit(_target_row)
+	return true
+
+
+## Manually move the platform down by one row. Clamps to the bottom of the mine,
+## tweens + re-anchors the camera via the same path as auto-descent, and emits
+## `descended(_target_row)`. Returns true if the row actually changed.
+func move_down() -> bool:
+	var bottom: int = Registry.mine_height_cells(_tables) - 1
+	if _target_row >= bottom:
+		return false
+	_target_row = mini(_target_row + 1, bottom)
+	_tween_to_target()
+	_reanchor_camera()
+	descended.emit(_target_row)
+	return true
+
+
 ## Tween the platform body toward the current target (AC-5.7.2: animate, never snap).
 func _tween_to_target() -> void:
 	if _body == null:

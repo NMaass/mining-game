@@ -1,0 +1,140 @@
+[gd_scene load_steps=7 format=3 uid="uid://shopmodal01"]
+
+[ext_resource type="Script" path="res://scripts/ui/shop_modal.gd" id="1_shopmodal"]
+[ext_resource type="FontFile" path="res://art/fonts/PixelifySans.ttf" id="2_pixelfont"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.11, 0.12, 0.15, 0.96)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.35, 0.38, 0.45, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_left = 12
+corner_radius_bottom_right = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_primarybtn"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.878, 0.376, 0.125, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 4
+border_color = Color(0.627, 0.22, 0.063, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_primarybtn_hover"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(1, 0.49, 0.18, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 4
+border_color = Color(0.69, 0.29, 0.09, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_secondarybtn"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.18, 0.2, 0.25, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 4
+border_color = Color(0.35, 0.38, 0.45, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_secondarybtn_hover"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.27, 0.3, 0.36, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 4
+border_color = Color(0.45, 0.48, 0.55, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[node name="ShopModal" type="CanvasLayer"]
+process_mode = 3
+visible = false
+layer = 5
+script = ExtResource("1_shopmodal")
+primary_button_normal = SubResource("StyleBoxFlat_primarybtn")
+primary_button_hover = SubResource("StyleBoxFlat_primarybtn_hover")
+secondary_button_normal = SubResource("StyleBoxFlat_secondarybtn")
+secondary_button_hover = SubResource("StyleBoxFlat_secondarybtn_hover")
+
+[node name="Backdrop" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.5)
+
+[node name="Panel" type="PanelContainer" parent="."]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = -260.0
+offset_right = 260.0
+offset_bottom = 260.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Box" type="VBoxContainer" parent="Panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="Panel/Box"]
+layout_mode = 2
+text = "SHOP"
+horizontal_alignment = 1
+theme_override_fonts/font = ExtResource("2_pixelfont")
+theme_override_font_sizes/font_size = 32
+
+[node name="EntriesContainer" type="HFlowContainer" parent="Panel/Box"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/h_separation = 16
+theme_override_constants/v_separation = 16
+
+[node name="CloseButton" type="Button" parent="Panel/Box"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 56)
+text = "CLOSE"
+theme_override_fonts/font = ExtResource("2_pixelfont")
+theme_override_font_sizes/font_size = 24
+theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")

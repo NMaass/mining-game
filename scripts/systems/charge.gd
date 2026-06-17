@@ -20,6 +20,12 @@ var _has_impacted: bool = false
 var _detonated: bool = false
 var _block_pixel_size: int = 64
 
+## Seconds after launch during which platform contacts are ignored. Prevents a
+## sticky charge from freezing/detonating on the launcher immediately after spawn.
+const _platform_grace_seconds: float = 0.18
+## Counts down from _platform_grace_seconds; platform impacts are no-ops while > 0.
+var _grace_timer: float = 0.0
+
 ## The visual Sprite2D child (charge.tscn). Spin + squash-stretch are applied to THIS node ONLY,
 ## never the CollisionShape2D, so the circle collider stays intact (charge/physics tests unchanged).
 @onready var _sprite: Sprite2D = get_node_or_null("Sprite2D")
@@ -50,6 +56,9 @@ func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64) 
 
 	# Connect body_entered for impact detection.
 	body_entered.connect(_on_body_entered)
+	# Begin the platform grace window so the launcher doesn't instantly trigger
+	# sticky / on_rest charges.
+	_grace_timer = _platform_grace_seconds
 
 ## Launch the charge at the given angle. Starts fuse timer for fuse_seconds mode.
 func launch(angle: float) -> void:
@@ -90,8 +99,8 @@ func _update_flight_visual(delta: float) -> void:
 	_sprite.scale = Vector2(1.0 + s, 1.0 - s * 0.6)
 
 
-func _on_body_entered(_body: Node) -> void:
-	on_impact()
+func _on_body_entered(body: Node) -> void:
+	on_impact(body)
 
 # ── Testable detonation logic (driven by physics OR directly by tests) ──────
 
@@ -100,15 +109,33 @@ func _on_body_entered(_body: Node) -> void:
 func step(delta: float) -> void:
 	if _detonated:
 		return
+	# Grace window: only platform contacts are suppressed; everything else
+	# (fuse, terrain impacts, on_settled) ticks normally.
+	if _grace_timer > 0.0:
+		_grace_timer = maxf(_grace_timer - delta, 0.0)
 	if _fuse_timer > 0.0:
 		_fuse_timer -= delta
 		if _fuse_timer <= 0.0:
 			_detonate()
 
+## Return true if `body` is the platform (group or collision layer 4).
+func _is_platform_body(body: Node) -> bool:
+	if body == null:
+		return false
+	if body.is_in_group("platform"):
+		return true
+	if body is CollisionObject2D:
+		return (body.collision_layer & 4) != 0
+	return false
+
 ## Handle a terrain/platform contact (sticky freeze, on_first_impact, sticky
 ## on_rest delay). Idempotent-ish: re-entrant contacts after detonation are no-ops.
-func on_impact() -> void:
+func on_impact(body: Node = null) -> void:
 	if _detonated:
+		return
+	# Platform grace: ignore launcher contacts for a short window after spawn.
+	# Terrain and other bodies still resolve normally during grace.
+	if _grace_timer > 0.0 and _is_platform_body(body):
 		return
 	_has_impacted = true
 

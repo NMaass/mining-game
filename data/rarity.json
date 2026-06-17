@@ -1,0 +1,9 @@
+{
+  "colors": {
+    "common": "#cccccc",
+    "uncommon": "#55cc55",
+    "rare": "#5599ff",
+    "epic": "#cc77ff",
+    "legendary": "#ffcc33"
+  }
+}
