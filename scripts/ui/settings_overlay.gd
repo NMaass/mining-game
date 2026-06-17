@@ -25,7 +25,11 @@ var _tables: Dictionary = {}
 var _settings: SettingsState = null
 ## Guards the slider→handler path while we push values INTO the sliders (avoids feedback).
 var _syncing: bool = false
+## Live tween handle for the open pop-in so a rapid re-open kills a prior one (no stuck alpha).
+var _tween: Tween = null
 
+@onready var _dim: Control = get_node_or_null("Dim")
+@onready var _dialog: Control = get_node_or_null("Center/Dialog")
 @onready var _sfx_slider: HSlider = get_node_or_null("Center/Dialog/Box/SfxSlider")
 @onready var _music_slider: HSlider = get_node_or_null("Center/Dialog/Box/MusicSlider")
 @onready var _motion_slider: HSlider = get_node_or_null("Center/Dialog/Box/MotionSlider")
@@ -52,6 +56,11 @@ func configure(tables: Dictionary, settings: SettingsState) -> void:
 
 ## Open the modal overlay: reflect current settings, show, and PAUSE the tree (AC-5.8.3). The Mine
 ## (and its in-flight charge / physics) freezes; this overlay keeps running (process_mode = ALWAYS).
+## v0.5 arcade pass: the Dialog POPS IN (scale 0.85→1.0 + alpha 0→1, TRANS_BACK) over
+## ui_panel_in_seconds while the Dim backdrop fades in. The overlay is process_mode = ALWAYS, so the
+## tween advances even though open() pauses the tree. `visible` (and thus is_open()) is set TRUE
+## SYNCHRONOUSLY before the tween so the overlay-state test reading is_open() right after stays green.
+## At motion ~0 (reduced motion) it snaps with no tween.
 func open() -> void:
 	_sync_from_settings()
 	_refresh_labels()
@@ -59,10 +68,46 @@ func open() -> void:
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	_animate_in()
+
+
+func _animate_in() -> void:
+	if _tween != null and _tween.is_valid():
+		_tween.kill()
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if _dialog != null:
+		_dialog.pivot_offset = _dialog.size * 0.5
+	if motion <= 0.01:
+		if _dialog != null:
+			_dialog.scale = Vector2.ONE
+			_dialog.modulate = Color(1, 1, 1, 1)
+		if _dim != null:
+			_dim.modulate = Color(1, 1, 1, 1)
+		return
+	if _dialog != null:
+		_dialog.scale = Vector2(0.85, 0.85)
+		_dialog.modulate = Color(1, 1, 1, 0)
+	if _dim != null:
+		_dim.modulate = Color(1, 1, 1, 0)
+	var seconds: float = Registry.ui_panel_in_seconds(_tables) if not _tables.is_empty() else 0.22
+	_tween = create_tween().set_parallel(true)
+	if _dialog != null:
+		_tween.tween_property(_dialog, "scale", Vector2.ONE, seconds) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		_tween.tween_property(_dialog, "modulate", Color(1, 1, 1, 1), seconds) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if _dim != null:
+		_tween.tween_property(_dim, "modulate", Color(1, 1, 1, 1), seconds) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 ## Close the overlay: hide, UN-pause the tree (restore play), and notify the controller (AC-5.8.3).
 func close() -> void:
+	if _tween != null and _tween.is_valid():
+		_tween.kill()
+	if _dialog != null:
+		_dialog.scale = Vector2.ONE
+		_dialog.modulate = Color(1, 1, 1, 1)
 	visible = false
 	var tree := get_tree()
 	if tree != null:

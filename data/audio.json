@@ -1,0 +1,26 @@
+{
+  "_comment": "Data-driven placeholder SFX (v0.5 arcade audio pass). Every cue's synthesis params live here, NOT hardcoded in audio.gd. One entry per Audio.EVENTS. Shape: freq>0 (Hz), dur in (0,2] (s), noise in [0,1] (white-noise mix), sweep>=0 (end Hz, 0=no glide), pitch_jitter in [0,0.5] (per-play random pitch variance so repeated cues sound organic; relic/prestige stay 0 to stay tonal). The 'combo' block drives the rising-pitch break rattle; detonate.layers is a layered boom (low body + bright transient + noise tail). audio.gd keeps a hardcoded fallback so a missing table can't silence the game.",
+  "events": {
+    "detonate": { "freq": 55.0, "dur": 0.22, "noise": 0.85, "sweep": 30.0, "pitch_jitter": 0.12 },
+    "crack": { "freq": 420.0, "dur": 0.04, "noise": 0.6, "sweep": 0.0, "pitch_jitter": 0.12 },
+    "break": { "freq": 140.0, "dur": 0.12, "noise": 0.7, "sweep": 90.0, "pitch_jitter": 0.12 },
+    "ore_credited": { "freq": 1250.0, "dur": 0.07, "noise": 0.0, "sweep": 0.0, "pitch_jitter": 0.06 },
+    "pack_open": { "freq": 620.0, "dur": 0.14, "noise": 0.1, "sweep": 820.0, "pitch_jitter": 0.05 },
+    "relic_found": { "freq": 523.0, "dur": 0.45, "noise": 0.0, "sweep": 1047.0, "pitch_jitter": 0.0 },
+    "prestige_banked": { "freq": 740.0, "dur": 0.25, "noise": 0.0, "sweep": 1109.0, "pitch_jitter": 0.0 },
+    "descend": { "freq": 80.0, "dur": 0.18, "noise": 0.45, "sweep": 55.0, "pitch_jitter": 0.05 },
+    "throw": { "freq": 300.0, "dur": 0.12, "noise": 0.85, "sweep": 900.0, "pitch_jitter": 0.1 }
+  },
+  "combo": {
+    "max_voices": 6,
+    "step_seconds": 0.025,
+    "semitone_step": 1.0
+  },
+  "detonate": {
+    "layers": [
+      { "freq": 48.0, "dur": 0.26, "noise": 0.2, "sweep": 26.0, "pitch_jitter": 0.08 },
+      { "freq": 180.0, "dur": 0.08, "noise": 0.4, "sweep": 60.0, "pitch_jitter": 0.1 },
+      { "freq": 90.0, "dur": 0.3, "noise": 0.95, "sweep": 40.0, "pitch_jitter": 0.12 }
+    ]
+  }
+}

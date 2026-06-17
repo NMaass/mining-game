@@ -22,6 +22,9 @@ func _load_real_tables() -> Dictionary:
 		var json := JSON.new()
 		assert_int(json.parse(f.get_as_text())).is_equal(OK)
 		out[file_name.get_basename()] = json.data
+	# Pack-affordability tests below assume a broke start ($0) and fund buys explicitly
+	# via _give_money; pin the starting grant to 0 so they stay independent of it.
+	(out["balance"] as Dictionary)["starting_money"] = 0
 	return out
 
 func _make_run() -> RunState:

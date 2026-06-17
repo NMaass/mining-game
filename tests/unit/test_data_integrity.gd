@@ -381,6 +381,96 @@ func test_validator_rejects_negative_edge_margin() -> void:
 	(t["balance"])["ui_edge_margin_px"] = -5
 	assert_array(_ac585_errors(t)).is_not_empty()
 
+# ── Money-juice tunables (v0.5 arcade pass) ──────────────────────────────────
+# The rolling-count-up duration + flying-coin timings/cap/arc are /data, gate-enforced via
+# _check_ui. Each negative breaks one branch — a typo'd key that silently read 0 would snap with no
+# animation (or suppress all coins), so the gate must reject out-of-band/missing values.
+
+func test_shipped_data_passes_money_juice_keys() -> void:
+	# Positive: the shipped balance satisfies the money-juice rules (present + in band).
+	var errors: Array = []
+	for e in Validator.validate(_load_real_tables()):
+		if str(e).contains("money juice"):
+			errors.append(e)
+	assert_array(errors).override_failure_message(
+		"shipped balance must satisfy the v0.5 money-juice rules"
+	).is_empty()
+
+func test_validator_requires_ui_money_roll_seconds() -> void:
+	# Mutation #1: a missing roll duration fails the gate (no code-side default for the count-up).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("ui_money_roll_seconds")
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject a balance missing 'ui_money_roll_seconds'"
+	).is_not_empty()
+
+func test_validator_rejects_zero_money_roll_seconds() -> void:
+	# Mutation #2: a 0-second roll is incoherent (it would snap with no animation) — strict-min > 0.
+	var t := _load_real_tables()
+	(t["balance"])["ui_money_roll_seconds"] = 0.0
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject ui_money_roll_seconds == 0"
+	).is_not_empty()
+
+func test_validator_rejects_zero_coin_fly_seconds() -> void:
+	# Mutation #3: a 0-second coin flight is incoherent — the coin must travel to the wallet.
+	var t := _load_real_tables()
+	(t["balance"])["coin_fly_seconds"] = 0.0
+	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_rejects_zero_coin_cap() -> void:
+	# Mutation #4: coin_max_active is a cap (>= 1); a 0 cap would suppress every flying coin. Reject.
+	var t := _load_real_tables()
+	(t["balance"])["coin_max_active"] = 0
+	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_rejects_negative_coin_arc_height() -> void:
+	# Mutation #5: a negative arc apex is nonsensical (>= 0 — a flat arc is allowed, a negative isn't).
+	var t := _load_real_tables()
+	(t["balance"])["coin_arc_height_px"] = -10
+	assert_array(Validator.validate(t)).is_not_empty()
+
+# ── UI/HUD-animation tunables present & in-band (v0.5 arcade pass) ──────────────
+# The modal pop-in/out durations, the relic/prestige screen-flash (alpha + fade), and the tray
+# select-pop duration are validated by _check_ui. A typo'd key that silently read 0 would snap with
+# no animation; an out-of-band flash alpha could blow out to a full-white strobe — the gate rejects
+# both. (>= 2 keys mutation-verified per the cluster's gate_risk; positive + negatives below.)
+
+func test_shipped_data_passes_ui_animation_keys() -> void:
+	# Positive: the shipped balance satisfies the UI-animation rules (present + in band).
+	var errors: Array = []
+	for e in Validator.validate(_load_real_tables()):
+		if str(e).contains("UI animation"):
+			errors.append(e)
+	assert_array(errors).override_failure_message(
+		"shipped balance must satisfy the v0.5 UI-animation rules"
+	).is_empty()
+
+func test_validator_requires_ui_panel_in_seconds() -> void:
+	# Mutation: a missing modal scale-in duration fails the gate (no code-side default for the pop-in).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("ui_panel_in_seconds")
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject a balance missing 'ui_panel_in_seconds'"
+	).is_not_empty()
+
+func test_validator_rejects_zero_ui_tray_pop_seconds() -> void:
+	# Mutation: a 0-second tray pop is incoherent (it would snap with no animation) — strict-min > 0.
+	var t := _load_real_tables()
+	(t["balance"])["ui_tray_pop_seconds"] = 0.0
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject ui_tray_pop_seconds == 0"
+	).is_not_empty()
+
+func test_validator_rejects_out_of_band_ui_flash_alpha() -> void:
+	# Mutation: the flash peak alpha is a11y-capped to [0,1]; an alpha > 1 (an opaque full-screen
+	# strobe — a photosensitivity hazard, AC-5.10.4) must be rejected at the gate, not the player.
+	var t := _load_real_tables()
+	(t["balance"])["ui_flash_alpha"] = 1.5
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject ui_flash_alpha out of [0,1]"
+	).is_not_empty()
+
 # ── HP-scaling multipliers present & positive (AC-5.2.1, AC-5.5.4) ───────────
 
 func test_validator_requires_depth_hp_mult() -> void:
@@ -423,9 +513,11 @@ func test_validator_rejects_negative_hardness() -> void:
 	(t["block_types"]["rock"])["hardness"] = -1
 	assert_array(Validator.validate(t)).is_not_empty()
 
-# ── Non-color block identity: palette + glyph (AC-5.10.2 / AC-5.10.3) ───────────
-# Each negative test breaks exactly ONE thing and asserts the matching AC error fires, so
-# the rule isn't passing for an unrelated reason (mirrors the depth-reward isolation pattern).
+# ── Non-color block identity: palette + luminance (AC-5.10.2 / AC-5.10.3) ───────
+# The v0.5 arcade pass REMOVED the debug-grid glyph overlay; the SOLE machine-checked
+# enforcement of non-color identity is now the luminance-delta loop (every two diggable
+# block colors must differ in brightness, not just hue). Each negative breaks exactly ONE
+# thing and asserts the matching AC error fires (mirrors the depth-reward isolation pattern).
 
 func _palette_errors(t: Dictionary, tag: String) -> Array:
 	var out: Array = []
@@ -434,8 +526,9 @@ func _palette_errors(t: Dictionary, tag: String) -> Array:
 			out.append(e)
 	return out
 
-func test_shipped_data_passes_palette_and_glyph_rules() -> void:
-	# AC-5.10.2/5.10.3 (positive): the shipped palette + glyphs satisfy the gate.
+func test_shipped_data_passes_palette_rules() -> void:
+	# AC-5.10.2/5.10.3 (positive): the shipped palette satisfies the gate (valid hex, indices
+	# in range, every block pair luminance-contrasting).
 	var errs: Array = _palette_errors(_load_real_tables(), "AC-5.10")
 	assert_array(errs).override_failure_message(str(errs)).is_empty()
 
@@ -456,25 +549,15 @@ func test_validator_rejects_invalid_hex_color() -> void:
 	(t["palette"]["colors"])[3] = "not-a-color"
 	assert_array(Validator.validate(t)).is_not_empty()
 
-func test_validator_rejects_duplicate_glyph() -> void:
-	# AC-5.10.2: two diggable block types sharing a glyph is a non-color-identity failure.
+func test_validator_rejects_equal_palette_index_luminance_collision() -> void:
+	# AC-5.10.3 (the KEPT identity gate after glyph removal): two diggable block types pointed at
+	# the SAME palette_index share one color → zero luminance delta → the gate must reject it.
+	# This proves the luminance-delta loop is the live non-color-identity enforcement.
 	var t := _load_real_tables()
-	var dirt_glyph: String = str((t["block_types"]["dirt"])["glyph"])
-	(t["block_types"]["rock"])["glyph"] = dirt_glyph
-	assert_array(_palette_errors(t, "AC-5.10.2")).override_failure_message(
-		"validator must reject two diggable blocks with the same glyph"
+	(t["block_types"]["ore_copper"])["palette_index"] = int((t["block_types"]["rock"])["palette_index"])
+	assert_array(_palette_errors(t, "AC-5.10.3")).override_failure_message(
+		"validator must reject two diggable blocks pointed at the same palette_index (no luminance contrast)"
 	).is_not_empty()
-
-func test_validator_rejects_none_glyph_on_diggable() -> void:
-	# AC-5.10.2: a diggable block with glyph "none" would convey identity by color alone.
-	var t := _load_real_tables()
-	(t["block_types"]["rock"])["glyph"] = "none"
-	assert_array(_palette_errors(t, "AC-5.10.2")).is_not_empty()
-
-func test_validator_rejects_unknown_glyph_shape() -> void:
-	var t := _load_real_tables()
-	(t["block_types"]["rock"])["glyph"] = "spiral"
-	assert_array(_palette_errors(t, "AC-5.10.2")).is_not_empty()
 
 func test_validator_rejects_low_luminance_contrast() -> void:
 	# AC-5.10.3: two diggable block colors that differ in hue but NOT luminance must fail
@@ -485,6 +568,81 @@ func test_validator_rejects_low_luminance_contrast() -> void:
 	(t["palette"]["colors"])[int((t["block_types"]["rock"])["palette_index"])] = "#608080"
 	assert_array(_palette_errors(t, "AC-5.10.3")).override_failure_message(
 		"validator must reject block colors that differ only in hue, not luminance"
+	).is_not_empty()
+
+func test_validator_rejects_missing_block_tiles_coord() -> void:
+	# Scene↔data coupling: art_sources.terrain.block_tiles must carry a tile coordinate for
+	# every diggable block (the BlockLayer samples the linked pixel-art tileset per type). A
+	# missing coordinate would leave a block type unmapped — the gate must reject it.
+	var t := _load_real_tables()
+	(t["art_sources"]["terrain"]["block_tiles"] as Dictionary).erase("rock")
+	assert_array(Validator.validate(t)).override_failure_message(
+		"validator must reject a diggable block missing its block_tiles coordinate"
+	).is_not_empty()
+
+func _art_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("art_sources"):
+			out.append(e)
+	return out
+
+func test_validator_accepts_block_tiles_variant_list() -> void:
+	# v0.5 tile variation: block_tiles accepts EITHER a single coord [x, y] OR a non-empty list
+	# of coords [[x, y], ...]. The shipped data uses the list form — it must pass cleanly, and the
+	# backward-compatible single-coord form (set on rock here) must also be accepted.
+	var t := _load_real_tables()
+	(t["art_sources"]["terrain"]["block_tiles"] as Dictionary)["rock"] = [6, 1]
+	assert_array(_art_errors(t)).override_failure_message(
+		"validator must accept both the single [x,y] and the list [[x,y],...] block_tiles forms"
+	).is_empty()
+
+func test_validator_rejects_empty_block_tiles_variant_list() -> void:
+	# An empty variant list leaves a type with no tile to sample — the gate must reject it (a
+	# typo'd "[]" must not silently fall through to a magenta/zero tile).
+	var t := _load_real_tables()
+	(t["art_sources"]["terrain"]["block_tiles"] as Dictionary)["dirt"] = []
+	assert_array(_art_errors(t)).override_failure_message(
+		"validator must reject an empty block_tiles variant list"
+	).is_not_empty()
+
+func test_validator_rejects_malformed_block_tiles_variant() -> void:
+	# A variant element that is not a 2-element [x,y] pair is malformed — reject (catches a list
+	# of bare ints like [13, 12, 14] that an author might write expecting per-cell columns).
+	var t := _load_real_tables()
+	(t["art_sources"]["terrain"]["block_tiles"] as Dictionary)["dirt"] = [[13, 0], [12]]
+	assert_array(_art_errors(t)).override_failure_message(
+		"validator must reject a block_tiles variant that is not an [x,y] pair"
+	).is_not_empty()
+
+# ── Headlamp deep-terrain tint (v0.5 arcade pass) ───────────────────────────────
+# The light mask fades toward a cool tint instead of pure black; the hex is /data, so a missing
+# or invalid value must fail the gate (else the shader reads magenta / silently disables the cast).
+
+func _light_tint_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("light_dark_tint"):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_light_dark_tint() -> void:
+	assert_array(_light_tint_errors(_load_real_tables())).override_failure_message(
+		"shipped balance.light_dark_tint must satisfy the gate"
+	).is_empty()
+
+func test_validator_requires_light_dark_tint() -> void:
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("light_dark_tint")
+	assert_array(_light_tint_errors(t)).override_failure_message(
+		"validator must require light_dark_tint (no code-side headlamp tint default)"
+	).is_not_empty()
+
+func test_validator_rejects_invalid_light_dark_tint() -> void:
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary)["light_dark_tint"] = "not-a-hex"
+	assert_array(_light_tint_errors(t)).override_failure_message(
+		"validator must reject an invalid light_dark_tint hex"
 	).is_not_empty()
 
 # ── Settings defaults + ranges (AC-5.10.1) ──────────────────────────────────
@@ -522,3 +680,215 @@ func test_validator_rejects_inverted_text_scale_band() -> void:
 	(t["balance"]["settings"])["text_scale_min"] = 2.0
 	(t["balance"]["settings"])["text_scale_max"] = 1.0
 	assert_array(_settings_errors(t)).is_not_empty()
+
+# ── VFX feel table (v0.5 arcade pass) ────────────────────────────────────────
+# The arcade-juice magnitudes are /data tunables; _check_vfx enumerates + range-checks every
+# key so a typo'd key can't silently read 0 (disabling a cue or soft-locking the hit-stop).
+# Each negative asserts a balance.vfx error fires.
+
+func _vfx_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("balance.vfx") or str(e).contains("'vfx'"):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_vfx_rules() -> void:
+	# Positive: the shipped vfx table satisfies the gate.
+	assert_array(_vfx_errors(_load_real_tables())).override_failure_message(
+		"shipped balance.vfx must satisfy _check_vfx"
+	).is_empty()
+
+func test_validator_requires_vfx_table() -> void:
+	# The vfx feel table is /data — a missing block fails the gate (no code-side feel defaults).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("vfx")
+	assert_array(_vfx_errors(t)).is_not_empty()
+
+func test_validator_requires_each_vfx_key() -> void:
+	# Mutation-verified key #1: a MISSING required key fails the gate (catches a typo'd rename).
+	var t := _load_real_tables()
+	(t["balance"]["vfx"] as Dictionary).erase("hitstop_min_cells")
+	assert_array(_vfx_errors(t)).override_failure_message(
+		"validator must reject a vfx table missing 'hitstop_min_cells'"
+	).is_not_empty()
+
+func test_validator_rejects_zero_hitstop_seconds() -> void:
+	# Mutation-verified key #2: a 0-second freeze is incoherent (a strict-min duration). The
+	# hit-stop bounds are load-bearing — an out-of-band value here would mis-time/soft-lock the freeze.
+	var t := _load_real_tables()
+	(t["balance"]["vfx"])["hitstop_seconds"] = 0.0
+	assert_array(_vfx_errors(t)).override_failure_message(
+		"validator must reject vfx.hitstop_seconds == 0"
+	).is_not_empty()
+
+func test_validator_rejects_out_of_band_hitstop_scale() -> void:
+	# Mutation-verified key #3: hitstop_scale must be in (0,1] — Engine.time_scale during the
+	# freeze. A value > 1 would speed up time, not freeze; reject it.
+	var t := _load_real_tables()
+	(t["balance"]["vfx"])["hitstop_scale"] = 1.5
+	assert_array(_vfx_errors(t)).override_failure_message(
+		"validator must reject vfx.hitstop_scale > 1"
+	).is_not_empty()
+
+func test_validator_rejects_out_of_band_zoom_punch() -> void:
+	# zoom_punch is clamped [0,0.3]; a larger kick would zoom too hard. Reject above the band.
+	var t := _load_real_tables()
+	(t["balance"]["vfx"])["zoom_punch"] = 0.9
+	assert_array(_vfx_errors(t)).is_not_empty()
+
+func test_validator_rejects_zero_debris_cap() -> void:
+	# max_debris_emitters is a cap (>= 1); a 0 cap would suppress all debris. Reject.
+	var t := _load_real_tables()
+	(t["balance"]["vfx"])["max_debris_emitters"] = 0
+	assert_array(_vfx_errors(t)).is_not_empty()
+
+# ── Launch & control-feel table (v0.5 arcade pass) ───────────────────────────
+# The throw-feel magnitudes (button squash/pop, animated aim line, platform recoil, muzzle flash)
+# are /data tunables; _check_feel enumerates + range-checks every key so a typo'd key can't silently
+# read 0 (which would disable a cue). Each negative asserts a balance.feel error fires (mirrors the
+# _vfx_errors isolation pattern). Covers >= 2 keys per the cluster's data-rule contract.
+
+func _feel_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("balance.feel") or str(e).contains("'feel'"):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_feel_rules() -> void:
+	# Positive: the shipped feel table satisfies the gate.
+	assert_array(_feel_errors(_load_real_tables())).override_failure_message(
+		"shipped balance.feel must satisfy _check_feel"
+	).is_empty()
+
+func test_validator_requires_feel_table() -> void:
+	# The feel table is /data — a missing block fails the gate (no code-side feel defaults).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("feel")
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject a missing balance.feel table"
+	).is_not_empty()
+
+func test_validator_requires_each_feel_key() -> void:
+	# Mutation-verified key #1: a MISSING required key fails the gate (catches a typo'd rename).
+	var t := _load_real_tables()
+	(t["balance"]["feel"] as Dictionary).erase("recoil_px")
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject a feel table missing 'recoil_px'"
+	).is_not_empty()
+
+func test_validator_rejects_out_of_band_throw_button_squash() -> void:
+	# Mutation-verified key #2: throw_button_squash is a (0,1] compress fraction. A value > 1 would
+	# INFLATE the button on press (not squash it); reject above the band.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["throw_button_squash"] = 1.4
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.throw_button_squash > 1"
+	).is_not_empty()
+
+func test_validator_rejects_zero_throw_button_squash() -> void:
+	# Mutation-verified key #3: a 0 squash would collapse the button to nothing on press. The band
+	# is strictly > 0; reject zero.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["throw_button_squash"] = 0.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.throw_button_squash == 0"
+	).is_not_empty()
+
+func test_validator_rejects_zero_pop_seconds() -> void:
+	# Mutation-verified key #4: the squash+pop duration is strictly > 0 (a 0 would snap with no
+	# animation). Reject zero.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["throw_button_pop_seconds"] = 0.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.throw_button_pop_seconds == 0"
+	).is_not_empty()
+
+func test_validator_rejects_negative_recoil_px() -> void:
+	# Mutation-verified key #5: recoil distance is >= 0 (0 = no kick is fine; negative is nonsensical).
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["recoil_px"] = -3.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject a negative feel.recoil_px"
+	).is_not_empty()
+
+func test_validator_rejects_zero_muzzle_flash_particles() -> void:
+	# Mutation-verified key #6: the muzzle flash needs >= 1 particle to read. A 0 burst is invisible.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["muzzle_flash_particles"] = 0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.muzzle_flash_particles == 0"
+	).is_not_empty()
+
+# ── Data-driven SFX table (v0.5 arcade audio pass) ───────────────────────────
+# The placeholder-SFX synthesis params now live in data/audio.json (consumed by audio.gd via
+# GameData), validated by _check_audio: one spec per Audio.EVENTS (freq>0, dur in (0,2], noise in
+# [0,1], sweep>=0, pitch_jitter in [0,0.5]); a combo block (>=1 voices, > 0 step, >= 0 semitone
+# climb); and a detonate.layers list of >= 3 valid voices. Each negative asserts an audio.* error
+# fires so a typo'd key can't silently read 0 and silence/distort a cue. (>= 2 keys mutation-verified.)
+
+func _audio_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("audio."):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_audio_rules() -> void:
+	# Positive: the shipped audio.json satisfies the gate.
+	assert_array(_audio_errors(_load_real_tables())).override_failure_message(
+		"shipped audio.json must satisfy _check_audio"
+	).is_empty()
+
+func test_validator_requires_audio_table() -> void:
+	# The SFX table is /data — a missing table fails the gate (audio.gd keeps a code fallback so the
+	# game still sounds, but the SHIPPED table must validate).
+	var t := _load_real_tables()
+	t.erase("audio")
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject a missing audio.json table"
+	).is_not_empty()
+
+func test_validator_requires_an_event_spec_per_core_event() -> void:
+	# Mutation-verified key #1: every Audio.EVENTS entry needs a spec. Drop one → error.
+	var t := _load_real_tables()
+	(t["audio"]["events"] as Dictionary).erase("descend")
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject an audio table missing the 'descend' event spec"
+	).is_not_empty()
+
+func test_validator_rejects_zero_event_freq() -> void:
+	# Mutation-verified key #2: a 0 Hz tone is silence. freq is strictly > 0.
+	var t := _load_real_tables()
+	(t["audio"]["events"]["break"])["freq"] = 0.0
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject audio.events.break.freq == 0"
+	).is_not_empty()
+
+func test_validator_rejects_out_of_band_pitch_jitter() -> void:
+	# Mutation-verified key #3: pitch_jitter is in [0,0.5]; a value above the band would warble a cue
+	# into a different note on every play.
+	var t := _load_real_tables()
+	(t["audio"]["events"]["break"])["pitch_jitter"] = 0.9
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject audio.events.break.pitch_jitter > 0.5"
+	).is_not_empty()
+
+func test_validator_rejects_too_few_detonate_layers() -> void:
+	# Mutation-verified key #4: the detonate boom needs >= 3 layered voices. Two → error.
+	var t := _load_real_tables()
+	var layers: Array = (t["audio"]["detonate"]["layers"] as Array)
+	(t["audio"]["detonate"])["layers"] = [layers[0], layers[1]]
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject a detonate boom with < 3 layers"
+	).is_not_empty()
+
+func test_validator_rejects_zero_combo_step_seconds() -> void:
+	# Mutation-verified key #5: the rattle's inter-voice spacing is strictly > 0 (a 0 stacks every
+	# voice on the same frame — not a rattle).
+	var t := _load_real_tables()
+	(t["audio"]["combo"])["step_seconds"] = 0.0
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject audio.combo.step_seconds == 0"
+	).is_not_empty()

@@ -221,6 +221,16 @@ static func light_softness_px(tables: Dictionary) -> float:
 static func light_dim_alpha(tables: Dictionary) -> float:
 	return float(balance(tables, "light_dim_alpha", 0.0))
 
+## The cool deep-terrain tint the headlamp light mask fades TOWARD (instead of pure black),
+## so the unlit mine reads as an atmospheric blue-violet cast rather than muddy black. Reads
+## the data-driven hex (balance.light_dark_tint); falls back to opaque black (the old look)
+## if absent/invalid so an unconfigured mask is harmless. The data gate enforces a valid hex.
+static func light_dark_tint(tables: Dictionary) -> Color:
+	var hex: String = str(balance(tables, "light_dark_tint", "#000000"))
+	if not Color.html_is_valid(hex):
+		return Color(0, 0, 0, 1)
+	return Color.html(hex)
+
 # ── Portrait HUD layout (U10 / AC-5.8.5) ──────────────────────────────────────
 ## Minimum interactive-control edge (pixels) for thumb-safe touch targets. The HUD
 ## sizes every tappable control to at least this, and the data gate enforces it sits
@@ -234,6 +244,49 @@ static func ui_min_touch_target_px(tables: Dictionary) -> float:
 static func ui_edge_margin_px(tables: Dictionary) -> float:
 	return float(balance(tables, "ui_edge_margin_px"))
 
+# ── Money juice (v0.5 arcade pass) ────────────────────────────────────────────
+## Duration (seconds) of the rolling money count-up on the HUD. Data-driven; the data
+## gate enforces presence + > 0 so the roll always has a non-zero ramp.
+static func ui_money_roll_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_money_roll_seconds"))
+
+## Coin travel time (seconds) from the broken ore cell to the wallet icon.
+static func coin_fly_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "coin_fly_seconds"))
+
+## Initial coin pop/arc-up time (seconds) before it flies to the wallet.
+static func coin_pop_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "coin_pop_seconds"))
+
+## Cap on concurrent flying coins (web budget); extra credits merge into the count-up.
+static func coin_max_active(tables: Dictionary) -> int:
+	return int(balance(tables, "coin_max_active"))
+
+## Coin arc apex height (logical px) on the initial pop.
+static func coin_arc_height_px(tables: Dictionary) -> float:
+	return float(balance(tables, "coin_arc_height_px"))
+
+# ── UI/HUD animation (v0.5 arcade pass) ───────────────────────────────────────
+## Scale-in duration (seconds) for a modal / the dig-end panel popping into view.
+static func ui_panel_in_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_panel_in_seconds"))
+
+## Scale-out duration (seconds) for a modal closing.
+static func ui_panel_out_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_panel_out_seconds"))
+
+## Peak alpha [0,1] of the relic/prestige screen flash. Capped (a11y) + motion-gated by the caller.
+static func ui_flash_alpha(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_flash_alpha"))
+
+## Fade duration (seconds) of the relic/prestige screen flash.
+static func ui_flash_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_flash_seconds"))
+
+## Tray-select pop duration (seconds) — the scale/elevation bounce on the tapped slot.
+static func ui_tray_pop_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "ui_tray_pop_seconds"))
+
 # ── Settings defaults + ranges (AC-5.10.1) ────────────────────────────────────
 ## The `balance.settings` sub-table: the data-driven default values + ranges the
 ## Settings UI seeds from (SFX/Music volume, motion intensity, UI text scale). Empty
@@ -242,6 +295,42 @@ static func ui_edge_margin_px(tables: Dictionary) -> float:
 static func settings_defaults(tables: Dictionary) -> Dictionary:
 	var s: Variant = tables.get("balance", {}).get("settings", {})
 	return s if s is Dictionary else {}
+
+# ── VFX feel table (v0.5 arcade pass) ─────────────────────────────────────────
+## The `balance.vfx` sub-table: every arcade-juice magnitude (camera shake, zoom punch,
+## hit-stop, explosion flash/ring, debris cap, value popups). Tunables are data, so these
+## live in /data and the data gate enforces presence + ranges (_check_vfx). Reads {} if
+## absent (invalid — the gate catches it before the game runs).
+static func vfx(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("vfx", {})
+	return x if x is Dictionary else {}
+
+## A vfx tunable as a float. No code-side balance fallback: a missing key reads as
+## `default_value` only for callers that explicitly tolerate it; the data gate is the
+## real contract (missing keys fail the gate).
+static func vfx_f(tables: Dictionary, key: String, default_value: float = 0.0) -> float:
+	return float(vfx(tables).get(key, default_value))
+
+## A vfx tunable as an int (e.g. debris cap, hit-stop min cells, popup cap).
+static func vfx_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
+	return int(vfx(tables).get(key, default_value))
+
+# ── Launch & control-feel table (v0.5 arcade pass) ────────────────────────────
+## The `balance.feel` sub-table: every launch/control-feel magnitude (throw-button squash/pop,
+## animated aim line width + dash scroll, platform recoil, muzzle-flash count). Tunables are data,
+## so these live in /data and the data gate enforces presence + ranges (_check_feel). Reads {} if
+## absent (invalid — the gate catches it before the game runs).
+static func feel(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("feel", {})
+	return x if x is Dictionary else {}
+
+## A feel tunable as a float (e.g. squash factor, aim line width, recoil px).
+static func feel_f(tables: Dictionary, key: String, default_value: float = 0.0) -> float:
+	return float(feel(tables).get(key, default_value))
+
+## A feel tunable as an int (e.g. muzzle-flash particle count).
+static func feel_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
+	return int(feel(tables).get(key, default_value))
 
 # ── HP-scaling multipliers (AC-5.2.1) ─────────────────────────────────────────
 ## Per-cell depth multiplier coefficient: depth_mult = 1 + depth_cells * this.

@@ -30,6 +30,8 @@ const _BAR_PAD := 10.0
 const _NAV_RESERVE := 220.0  # horizontal room kept for the top-right buttons
 
 @onready var _top: Control = get_node_or_null("Top")
+@onready var _money_box: Control = get_node_or_null("Top/MoneyBox")
+@onready var _money_icon: Control = get_node_or_null("Top/MoneyBox/MoneyIcon")
 @onready var _money_label: Label = get_node_or_null("Top/MoneyBox/Money")
 @onready var _depth_label: Label = get_node_or_null("Top/DepthBox/Depth")
 @onready var _relic_label: Label = get_node_or_null("Top/RelicBox/Relic")
@@ -39,6 +41,10 @@ const _NAV_RESERVE := 220.0  # horizontal room kept for the top-right buttons
 @onready var _end_dig_button: Button = get_node_or_null("TopRight/EndDigButton")
 @onready var _bottom: Control = get_node_or_null("Bottom")
 @onready var _bottom_bg: Control = get_node_or_null("BottomBg")
+## Full-screen flash overlay (authored in mine.tscn, modulate.a = 0 at rest) — the relic/prestige
+## screen wash. A legitimate full-screen flash ColorRect (like the light-mask ColorRect), distinct
+## from the no-ColorRect-for-EXPLOSIONS rule. mouse_filter = IGNORE so it never eats input.
+@onready var _flash_rect: ColorRect = get_node_or_null("FlashRect")
 
 ## Tables (for the data-driven touch-target + edge-margin values). Set via configure().
 var _tables: Dictionary = {}
@@ -50,6 +56,18 @@ var _text_scale: float = 1.0
 var _base_font_sizes: Dictionary = {}  # Label -> int authored base font size
 ## Last money value pushed in, so a text-scale change re-renders it with the right abbreviation.
 var _money_value: int = 0
+## The currently-DISPLAYED money during a rolling count-up (a float so the tween can interpolate
+## fractionally between the old and new balance). Independent of _money_value, which is the
+## canonical (snap-exact) target the deterministic/test path writes via set_money.
+var _displayed_money: float = 0.0
+## Live tween handles so a new roll/pop kills the prior one (no compounding scale / stale value).
+var _money_roll_tween: Tween = null
+var _money_pop_tween: Tween = null
+## Live tween handles for the relic/prestige screen flash, the relic-chip pulse, and the depth bump
+## (each killed before a re-trigger so rapid beats don't compound scale / leave a stuck alpha).
+var _flash_tween: Tween = null
+var _relic_pulse_tween: Tween = null
+var _depth_bump_tween: Tween = null
 
 
 func _ready() -> void:
@@ -177,8 +195,122 @@ func last_insets() -> Dictionary:
 ## scale on the smallest portrait res (AC-5.8.6: numbers reflow/abbreviate).
 func set_money(amount: int) -> void:
 	_money_value = amount
+	# Keep the rolling-display float in lockstep so a later tick_money_to starts from the exact
+	# snapped balance (and a snap mid-roll, e.g. the test path, leaves no stale interpolation behind).
+	_displayed_money = float(amount)
 	if _money_label != null:
 		_money_label.text = _format_money(amount)
+
+
+## Animated count-up to `amount` (v0.5 money juice). SEPARATE from set_money so the canonical,
+## test-read label stays snap-exact: this tweens a private _displayed_money float (formatting each
+## step with the same _format_money) and a brief label scale-pop, then SNAPS to set_money(amount) on
+## finish so the final readout is byte-identical to the deterministic path. At motion ~0 (or no label)
+## it snaps immediately. Called ONLY from the live credit path; tests/determinism use set_money.
+func tick_money_to(amount: int, motion: float = 1.0) -> void:
+	if _money_label == null or motion <= 0.01:
+		set_money(amount)
+		return
+	var start: float = _displayed_money
+	if is_equal_approx(start, float(amount)):
+		set_money(amount)
+		return
+	var seconds: float = Registry.ui_money_roll_seconds(_tables) if not _tables.is_empty() else 0.35
+	# Track the target so a tween that started before another credit still lands on the final balance.
+	_money_value = amount
+	if _money_roll_tween != null and _money_roll_tween.is_valid():
+		_money_roll_tween.kill()
+	_money_roll_tween = create_tween()
+	_money_roll_tween.tween_method(_set_rolling_money, start, float(amount), seconds) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_money_roll_tween.finished.connect(func() -> void: set_money(amount))
+	pop_money()
+
+
+## Tween callback: write the interpolated rolling value to the label (formatted like the final text).
+func _set_rolling_money(value: float) -> void:
+	_displayed_money = value
+	if _money_label != null:
+		_money_label.text = _format_money(int(round(value)))
+
+
+## A quick scale-pop + gold flash on the money readout when a coin lands (v0.5 money juice). Kills a
+## prior pop so rapid arrivals don't compound. No-op headless if the label is absent.
+func pop_money() -> void:
+	if _money_label == null:
+		return
+	_money_label.pivot_offset = _money_label.size * 0.5
+	if _money_pop_tween != null and _money_pop_tween.is_valid():
+		_money_pop_tween.kill()
+	_money_label.scale = Vector2.ONE
+	_money_pop_tween = create_tween()
+	_money_pop_tween.tween_property(_money_label, "scale", Vector2(1.18, 1.18), 0.07) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_money_pop_tween.tween_property(_money_label, "scale", Vector2.ONE, 0.09) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# Brief gold modulate flash on the label + the wallet icon, eased back to white.
+	var gold := Color(1.0, 0.85, 0.3)
+	var flash := create_tween().set_parallel(true)
+	flash.tween_property(_money_label, "modulate", gold, 0.06)
+	if _money_icon != null:
+		flash.tween_property(_money_icon, "modulate", gold, 0.06)
+	var back := create_tween().set_parallel(true)
+	back.tween_interval(0.06)
+	back.chain().tween_property(_money_label, "modulate", Color.WHITE, 0.18)
+	if _money_icon != null:
+		back.tween_property(_money_icon, "modulate", Color.WHITE, 0.18)
+
+
+## A brief full-screen screen flash on a big beat (v0.5 arcade pass): the relic break (warm gold) and
+## the prestige bank (brighter). Tweens the FlashRect modulate.a from `peak`→0 over `seconds`. The
+## peak alpha is HARD-gated on motion intensity AND capped by the caller's data value (ui_flash_alpha
+## in [0,1]) — never a full-white opaque strobe — so it stays photosensitivity-safe (AC-5.10.4). Only
+## the two big beats call this (never every blast). No-op headless if the FlashRect is absent.
+func flash(color: Color, peak_alpha: float, seconds: float, motion: float = 1.0) -> void:
+	if _flash_rect == null:
+		return
+	var m: float = clampf(motion, 0.0, 1.0)
+	# Scale the peak by motion so reduced-motion players get a barely-there (or zero) wash. Cap to
+	# [0,1] defensively even though the data gate already bounds ui_flash_alpha.
+	var a: float = clampf(peak_alpha, 0.0, 1.0) * m
+	if _flash_tween != null and _flash_tween.is_valid():
+		_flash_tween.kill()
+	_flash_rect.color = Color(color.r, color.g, color.b, 1.0)
+	if a <= 0.001:
+		_flash_rect.modulate = Color(1, 1, 1, 0)
+		return
+	_flash_rect.modulate = Color(1, 1, 1, a)
+	_flash_tween = create_tween()
+	_flash_tween.tween_property(_flash_rect, "modulate", Color(1, 1, 1, 0.0), maxf(0.01, seconds)) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+## A quick vertical squash on the depth chip when the platform drops (v0.5 arcade pass). Presentation
+## only (no new tunable). No-op headless if the label is absent.
+func bump_depth() -> void:
+	if _depth_label == null:
+		return
+	_depth_label.pivot_offset = _depth_label.size * 0.5
+	if _depth_bump_tween != null and _depth_bump_tween.is_valid():
+		_depth_bump_tween.kill()
+	_depth_label.scale = Vector2.ONE
+	_depth_bump_tween = create_tween()
+	_depth_bump_tween.tween_property(_depth_label, "scale", Vector2(1.15, 1.15), 0.06) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_depth_bump_tween.tween_property(_depth_label, "scale", Vector2.ONE, 0.08) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Screen-space (canvas) center of the wallet icon, the target a flying coin homes to. Falls back to
+## the money box, then the top-left edge, so a coin always has a sane destination even if a node is
+## missing. Returns the global RECT center in viewport pixels (coins are spawned on the same HUD
+## CanvasLayer space the mine projects world→canvas into).
+func money_icon_screen_position() -> Vector2:
+	var target: Control = _money_icon if _money_icon != null else _money_box
+	if target != null:
+		var r: Rect2 = target.get_global_rect()
+		return r.position + r.size * 0.5
+	return Vector2(40.0, 40.0)
 
 
 ## Compact money string: exact under 10k; K above 10k; M above 10M. Keeps the label short so a
@@ -219,11 +351,35 @@ func set_depth(depth_cells: int) -> void:
 		_depth_label.text = "Depth %d" % depth_cells
 
 
+## Tracks the last relic-found state so the chip pulse fires ONLY on the false→true transition
+## (the relic break), not on every _refresh_all_ui that re-pushes the same state.
+var _relic_found_shown: bool = false
+
+
 ## Update the compact relic-progress indicator (AC-5.8.1). `found` toggles between the
-## "objective: relic" hint and the collected state.
-func set_relic_progress(found: bool) -> void:
+## "objective: relic" hint and the collected state. v0.5 arcade pass: on the false→true transition
+## (the relic break) the chip PULSES (scale 1.0→1.4→1.0), motion-gated. `motion` defaults to 1.0 so
+## the refresh path keeps working; mine.gd passes the real motion intensity at the break beat.
+func set_relic_progress(found: bool, motion: float = 1.0) -> void:
 	if _relic_label != null:
 		_relic_label.text = "Relic ✓" if found else "Relic …"
+	if found and not _relic_found_shown:
+		_pulse_relic(motion)
+	_relic_found_shown = found
+
+
+func _pulse_relic(motion: float) -> void:
+	if _relic_label == null or clampf(motion, 0.0, 1.0) <= 0.01:
+		return
+	_relic_label.pivot_offset = _relic_label.size * 0.5
+	if _relic_pulse_tween != null and _relic_pulse_tween.is_valid():
+		_relic_pulse_tween.kill()
+	_relic_label.scale = Vector2.ONE
+	_relic_pulse_tween = create_tween()
+	_relic_pulse_tween.tween_property(_relic_label, "scale", Vector2(1.4, 1.4), 0.1) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_relic_pulse_tween.tween_property(_relic_label, "scale", Vector2.ONE, 0.14) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 ## Update the depth resource-odds readout (AC-5.8.8). `odds` is {block_id: probability 0..1}.

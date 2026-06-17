@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3 uid="uid://dmine001"]
+[gd_scene load_steps=24 format=3 uid="uid://dmine001"]
 
 [ext_resource type="Script" path="res://scripts/ui/mine.gd" id="1_mine"]
 [ext_resource type="PackedScene" uid="uid://dblockgrid01" path="res://scenes/block_grid.tscn" id="2_grid"]
@@ -14,9 +14,17 @@
 [ext_resource type="Texture2D" path="res://art/runtime/icons/money.png" id="12_iconmoney"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/depth.png" id="13_icondepth"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/relic.png" id="14_iconrelic"]
+[ext_resource type="Texture2D" uid="uid://coq1hjp3r6vwq" path="res://art/runtime/shockwave_ring.png" id="15_reticle"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_lightmask"]
 shader = ExtResource("10_lightradius")
+
+[sub_resource type="Gradient" id="Gradient_aim"]
+offsets = PackedFloat32Array(0, 1)
+colors = PackedColorArray(1, 1, 0.6, 0.85, 1, 0.85, 0.4, 0.25)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_aim"]
+gradient = SubResource("Gradient_aim")
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bottombar"]
 content_margin_left = 8.0
@@ -116,8 +124,20 @@ script = ExtResource("8_shaftguide")
 
 [node name="AimPreview" type="Line2D" parent="."]
 z_index = 5
-width = 3.0
-default_color = Color(1, 1, 0.5, 0.6)
+width = 5.0
+default_color = Color(1, 1, 1, 1)
+gradient = SubResource("GradientTexture1D_aim")
+joint_mode = 2
+begin_cap_mode = 2
+end_cap_mode = 2
+antialiased = true
+
+[node name="AimReticle" type="Sprite2D" parent="."]
+visible = false
+z_index = 6
+modulate = Color(1, 0.95, 0.55, 0.9)
+scale = Vector2(0.22, 0.22)
+texture = ExtResource("15_reticle")
 
 [node name="LightMaskLayer" type="CanvasLayer" parent="."]
 layer = 1
@@ -264,6 +284,16 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
+[node name="DigEndBackdrop" type="ColorRect" parent="Hud"]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.5)
+
 [node name="DigEndPanel" type="PanelContainer" parent="Hud"]
 visible = false
 offset_left = 120.0
@@ -318,6 +348,16 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
+[node name="FlashRect" type="ColorRect" parent="Hud"]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(1, 0.85, 0.4, 1)
+
 [node name="Overlay" parent="." instance=ExtResource("7_overlay")]
 
 [node name="PrestigeOffer" type="CanvasLayer" parent="."]
@@ -325,6 +365,15 @@ process_mode = 3
 visible = false
 layer = 5
 script = ExtResource("9_prestigeoffer")
+
+[node name="Backdrop" type="ColorRect" parent="PrestigeOffer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+color = Color(0, 0, 0, 0.5)
 
 [node name="Panel" type="PanelContainer" parent="PrestigeOffer"]
 anchors_preset = 8

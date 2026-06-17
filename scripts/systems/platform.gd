@@ -56,6 +56,33 @@ var _descent_tween: Tween = null
 ## player can see where the charge is going. Applied on top of the vertical lookahead.
 var _look_ahead_cells: int = 0
 
+# ── Trauma-based camera shake (v0.5 arcade pass) ──────────────────────────────
+## A decaying "trauma" model (GDC "Juice it or lose it" lineage): each blast ADDS
+## trauma (clamped to 1); the per-frame camera OFFSET is `trauma²` × (a directional
+## kick away from the impact + a smooth FastNoiseLite wobble), and trauma decays
+## linearly each second. Bigger breaks add more trauma → a larger, longer kick. ALL
+## writes go to `_camera.offset` (and zoom) — NEVER `_camera.position` or the platform
+## target — so AC-5.7.3 (camera follows the platform target via smoothing) stays green;
+## when trauma reaches 0 the offset is hard-set EXACTLY to Vector2.ZERO so it can never
+## fight the position smoothing. All magnitudes are /data (Registry.vfx_*), not literals.
+var _trauma: float = 0.0
+var _shake_t: float = 0.0
+var _kick_dir: Vector2 = Vector2.ZERO
+var _noise: FastNoiseLite = null
+## Live zoom-punch tween (kept so a fresh punch restarts cleanly without stacking).
+var _zoom_tween: Tween = null
+
+# ── Launch recoil (v0.5 arcade pass) ──────────────────────────────────────────
+## A throw kicks the platform DECK opposite the launch direction then springs it back — a
+## tactile "shove" that sells the launch. The kick is applied to the `Body/Visual` child ONLY
+## (never `Body.position`, which the descent tween owns, and never the collider/muzzle/camera),
+## so recoil can never fight the descent animation or drift the launch point. The rest position
+## is the Visual's authored local position; every recoil tweens back to exactly that, so an
+## interrupted recoil mid-descent (or a second throw) can never strand the deck off-center.
+var _recoil_tween: Tween = null
+## The Visual child's authored rest position (captured once at configure) — recoil springs back here.
+var _visual_rest: Vector2 = Vector2.ZERO
+
 ## Configure the platform from /data tables. Call once after instancing. Idempotent
 ## w.r.t. tunables; resets the target row to `start_row` (default 0).
 func configure(tables: Dictionary, start_row: int = 0) -> void:
@@ -70,7 +97,16 @@ func configure(tables: Dictionary, start_row: int = 0) -> void:
 	_lookahead_cells = Registry.camera_lookahead_cells(tables)
 	_camera_zoom = Registry.camera_zoom(tables)
 	_target_row = start_row
+	# Smooth (non-jitter) shake noise — frequency is data-driven so the wobble character
+	# is a tunable. FastNoiseLite is already a known-good dep (block_gen.gd uses it).
+	if _noise == null:
+		_noise = FastNoiseLite.new()
+	_noise.frequency = Registry.vfx_f(tables, "shake_noise_freq", 5.0)
 	_configure_body_geometry()
+	# Capture the deck Visual's authored rest position so launch recoil always springs back to it.
+	var visual_node := get_node_or_null("Body/Visual") as Node2D
+	if visual_node != null:
+		_visual_rest = visual_node.position
 	# Place the platform + camera at the starting target (no tween on initial place).
 	if _body != null:
 		_body.position = platform_target_position()
@@ -125,17 +161,105 @@ func set_look_ahead(angle: float) -> void:
 	_reanchor_camera()
 
 
-## Apply a short screenshake offset to the camera. Intensity is scaled by the
-## motion-intensity accessibility setting by the caller.
-func shake(intensity_px: float) -> void:
-	if _camera == null or intensity_px <= 0.0:
+## Add trauma to the decaying camera-shake model and aim its directional kick AWAY
+## from the impact. `amount` is the trauma to add (caller scales it by the motion-
+## intensity accessibility setting + the cleared-cell count); `from_world_pos` is the
+## blast center in world space — the kick points from the impact toward the camera
+## anchor so a blast "shoves" the view away from itself. Trauma is clamped to 1; the
+## per-frame offset (computed in _process) is `trauma²`-shaped so it decays softly.
+## Writes nothing to the camera directly — _process owns the offset (NEVER position).
+func add_trauma(amount: float, from_world_pos: Vector2) -> void:
+	if amount <= 0.0:
 		return
-	var tween := create_tween()
-	var duration := 0.18
-	var half := intensity_px * 0.5
-	var base := _camera.offset
-	tween.tween_property(_camera, "offset", base + Vector2(randf_range(-half, half), randf_range(-half, half)), duration * 0.5)
-	tween.tween_property(_camera, "offset", base, duration * 0.5)
+	_trauma = minf(1.0, _trauma + amount)
+	var anchor: Vector2 = camera_target_position()
+	var dir: Vector2 = anchor - from_world_pos
+	# Degenerate (blast exactly at the anchor): keep the last direction so the kick
+	# still reads; otherwise point away from the impact.
+	if dir.length_squared() > 0.0001:
+		_kick_dir = dir.normalized()
+
+
+## Per-frame camera-shake offset (AC-5.7.3-safe: writes _camera.offset ONLY). Decays the
+## trauma, shapes it `trauma²`, and combines a directional kick away from the last impact
+## with a smooth FastNoiseLite wobble. When trauma reaches 0 the offset is hard-set EXACTLY
+## to Vector2.ZERO so a residual sub-pixel offset never fights the position smoothing.
+func _process(delta: float) -> void:
+	if _camera == null:
+		return
+	if _trauma <= 0.0:
+		# Idle: ensure the offset is exactly zero (set once, then cheap no-op).
+		if _camera.offset != Vector2.ZERO:
+			_camera.offset = Vector2.ZERO
+		return
+	var decay: float = Registry.vfx_f(_tables, "shake_decay_per_sec", 1.8)
+	_trauma = maxf(_trauma - decay * delta, 0.0)
+	_shake_t += delta
+	if _trauma <= 0.0:
+		# Trauma fully spent this frame — snap the offset back to dead center exactly.
+		_camera.offset = Vector2.ZERO
+		return
+	var amt: float = _trauma * _trauma
+	var kick_px: float = Registry.vfx_f(_tables, "shake_kick_px", 6.0)
+	var max_offset: float = Registry.vfx_f(_tables, "shake_max_offset_px", 10.0)
+	# Two decorrelated noise lanes (one per axis) sampled along the shake clock. The
+	# FastNoiseLite `frequency` (vfx.shake_noise_freq) sets the wobble speed, so the time
+	# coordinate is passed raw — a smooth, non-jittery sway rather than per-frame random.
+	var wobble := Vector2(
+		max_offset * amt * _noise.get_noise_2d(_shake_t, 0.0),
+		max_offset * amt * _noise.get_noise_2d(0.0, _shake_t)
+	)
+	_camera.offset = _kick_dir * kick_px * amt + wobble
+
+
+## Punch the camera ZOOM in briefly then ease it back to the base zoom — a snappy "kick"
+## that sells the detonation's weight. `strength` (>= 0) scales the punch fraction; the
+## punch magnitude/settle time are /data (vfx.zoom_punch / vfx.zoom_punch_seconds). Writes
+## _camera.zoom ONLY (never position). _reanchor_camera re-asserts the base zoom on descent
+## so a punch in flight can never strand the zoom off-base.
+func zoom_punch(strength: float) -> void:
+	if _camera == null or strength <= 0.0:
+		return
+	var punch: float = Registry.vfx_f(_tables, "zoom_punch", 0.06) * clampf(strength, 0.0, 1.0)
+	if punch <= 0.0:
+		return
+	var seconds: float = Registry.vfx_f(_tables, "zoom_punch_seconds", 0.18)
+	if _zoom_tween != null and _zoom_tween.is_valid():
+		_zoom_tween.kill()
+	var base: Vector2 = Vector2(_camera_zoom, _camera_zoom)
+	# Zoom IN = larger zoom value in Godot (Camera2D.zoom multiplies). Punch in, ease back.
+	_camera.zoom = base * (1.0 + punch)
+	_zoom_tween = create_tween()
+	_zoom_tween.tween_property(_camera, "zoom", base, seconds) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+
+
+## Kick the platform DECK opposite the launch direction then spring it back — a tactile recoil
+## on every throw. `angle` is the launch angle in radians (0 = down; → Aim.angle_to_direction);
+## `px` is the recoil distance (caller scales it by the motion-intensity accessibility setting, so
+## motion 0 → no kick). Writes ONLY the `Body/Visual` child's local position (the deck art) — never
+## `Body.position` (the descent tween owns that), the collider, the muzzle, or the camera — so AC-5.7.x
+## stays green and recoil can't fight the descent. The spring-back ALWAYS targets the authored rest
+## position, so an interrupted/overlapping recoil can never strand the deck off-center.
+func recoil(angle: float, px: float) -> void:
+	if px <= 0.0:
+		return
+	var visual := get_node_or_null("Body/Visual") as Node2D
+	if visual == null:
+		return
+	# Launch direction (0 = straight down). Recoil is the OPPOSITE — the deck is shoved back.
+	var launch_dir := Vector2(sin(angle), cos(angle))
+	var kick: Vector2 = _visual_rest - launch_dir.normalized() * px
+	if _recoil_tween != null and _recoil_tween.is_valid():
+		_recoil_tween.kill()
+	# Apply the kick IMMEDIATELY (a snappy shove the same frame as the throw) then SPRING back to the
+	# authored rest over a short tween (TRANS_BACK eases past-and-settle). Setting the kick directly —
+	# rather than tweening into it — makes the recoil read instantly and keeps the deck deterministic
+	# at rest once the tween finishes (no timing-dependent intermediate the next throw could stack on).
+	visual.position = kick
+	_recoil_tween = create_tween()
+	_recoil_tween.tween_property(visual, "position", _visual_rest, 0.18) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
 func _shaft_x_center() -> float:
@@ -245,3 +369,16 @@ func _configure_body_geometry() -> void:
 var shaft_left_cell: int:
 	get:
 		return _shaft_left
+
+
+## Current camera-shake trauma in [0,1] (read-only). Exposed so the shake decay-to-zero
+## invariant is assertable headless without reaching into the camera every frame.
+var trauma: float:
+	get:
+		return _trauma
+
+
+## The live camera offset (read-only convenience for tests/callers). By contract the shake
+## writes ONLY this and zoom — never position/target — so AC-5.7.3 stays green.
+func camera_offset() -> Vector2:
+	return _camera.offset if _camera != null else Vector2.ZERO

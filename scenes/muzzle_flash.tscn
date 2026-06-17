@@ -1,0 +1,42 @@
+[gd_scene load_steps=7 format=3 uid="uid://dmuzzleflash01"]
+
+[ext_resource type="Texture2D" uid="uid://dtdv1qwh57e2p" path="res://art/runtime/explosion_particle.png" id="1_sparktex"]
+[ext_resource type="Texture2D" uid="uid://dxodxks2jkc38" path="res://art/runtime/flash_core.png" id="2_flashtex"]
+
+[sub_resource type="Gradient" id="Gradient_muzzle"]
+offsets = PackedFloat32Array(0, 0.5, 1)
+colors = PackedColorArray(1, 0.97, 0.7, 1, 1, 0.7, 0.3, 0.85, 0.9, 0.4, 0.15, 0)
+
+[sub_resource type="GradientTexture1D" id="GradientTexture1D_muzzle"]
+gradient = SubResource("Gradient_muzzle")
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_muzzle"]
+particle_flag_disable_z = true
+emission_shape = 1
+emission_sphere_radius = 3.0
+direction = Vector3(0, 1, 0)
+spread = 70.0
+initial_velocity_min = 60.0
+initial_velocity_max = 160.0
+gravity = Vector3(0, 80, 0)
+scale_min = 1.0
+scale_max = 2.0
+color_ramp = SubResource("GradientTexture1D_muzzle")
+
+[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_muzzle_additive"]
+blend_mode = 1
+
+[node name="MuzzleFlash" type="GPUParticles2D"]
+emitting = false
+amount = 10
+lifetime = 0.22
+one_shot = true
+explosiveness = 1.0
+texture = ExtResource("1_sparktex")
+process_material = SubResource("ParticleProcessMaterial_muzzle")
+
+[node name="Flash" type="Sprite2D" parent="."]
+material = SubResource("CanvasItemMaterial_muzzle_additive")
+modulate = Color(1, 0.95, 0.7, 1)
+scale = Vector2(0.18, 0.18)
+texture = ExtResource("2_flashtex")

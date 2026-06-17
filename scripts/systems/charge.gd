@@ -20,6 +20,15 @@ var _has_impacted: bool = false
 var _detonated: bool = false
 var _block_pixel_size: int = 64
 
+## The visual Sprite2D child (charge.tscn). Spin + squash-stretch are applied to THIS node ONLY,
+## never the CollisionShape2D, so the circle collider stays intact (charge/physics tests unchanged).
+@onready var _sprite: Sprite2D = get_node_or_null("Sprite2D")
+## Tumble speed in radians per (px/sec) of travel — a thrown charge visibly spins along its arc.
+const SPIN_PER_SPEED := 0.018
+## Squash-stretch gain: at this speed (px/s) the sprite reaches the full stretch_max elongation.
+const STRETCH_REF_SPEED := 600.0
+const STRETCH_MAX := 0.35
+
 ## Set up the charge with throw parameters.
 func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64) -> void:
 	_params = params
@@ -53,12 +62,33 @@ func launch(angle: float) -> void:
 func _physics_process(delta: float) -> void:
 	if _detonated:
 		return
+	# Cosmetic-only flight feel: the thrown charge tumbles + squash-stretches by its speed. This
+	# scales/rotates the SPRITE CHILD ONLY — never the CollisionShape2D — so the circle collider is
+	# untouched and the physics/charge tests stay green (the gate_risk for this cluster).
+	_update_flight_visual(delta)
 	# Advance fuse/timer logic.
 	step(delta)
 	# on_rest: detonate when the body has come to rest. v0.4 fix: this resolves
 	# even with NO prior impact (a charge that drifts to a stop must not soft-lock).
 	if _params and _params.detonation_mode == "on_rest" and sleeping:
 		on_settled()
+
+## Tumble + squash-stretch the visual Sprite2D child by the charge's speed (cosmetic only).
+## The sprite spins proportional to speed (a thrown charge visibly rolls) and elongates along its
+## travel as it gets faster, easing back to round as it slows. Touches ONLY the Sprite2D child —
+## the CollisionShape2D circle is never scaled/rotated, so the collider is exactly the authored
+## radius and the charge/physics tests are unaffected.
+func _update_flight_visual(delta: float) -> void:
+	if _sprite == null:
+		return
+	var vel: Vector2 = linear_velocity
+	var speed: float = vel.length()
+	# Spin: accumulate rotation by speed so the tumble reads at a glance (faster → faster spin).
+	_sprite.rotation += speed * SPIN_PER_SPEED * delta
+	# Squash-stretch: stretch along the sprite's local X (its current facing), squash on Y, by speed.
+	var s: float = clampf(speed / STRETCH_REF_SPEED, 0.0, 1.0) * STRETCH_MAX
+	_sprite.scale = Vector2(1.0 + s, 1.0 - s * 0.6)
+
 
 func _on_body_entered(_body: Node) -> void:
 	on_impact()

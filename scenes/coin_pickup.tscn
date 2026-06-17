@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3 uid="uid://dcoinpickup01"]
+
+[ext_resource type="Script" path="res://scripts/ui/coin_pickup.gd" id="0_coinpickup"]
+[ext_resource type="Texture2D" path="res://art/runtime/icons/money.png" id="1_cointex"]
+
+[node name="CoinPickup" type="Sprite2D"]
+z_index = 11
+texture = ExtResource("1_cointex")
+script = ExtResource("0_coinpickup")

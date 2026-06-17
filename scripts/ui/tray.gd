@@ -15,12 +15,15 @@ extends HBoxContainer
 ## Emitted when a tray slot is tapped/clicked. Carries the charge id of that slot.
 signal slot_selected(charge_id: String)
 
-## Tables (for display names); set via configure(). No balance is read here.
+## Tables (for display names + the data-driven select-pop duration); set via configure(). No
+## game balance is read here.
 var _tables: Dictionary = {}
 
 ## Parallel arrays describing the current slots, in display order.
 var _slot_ids: Array = []        # charge id per slot (index 0 = free charge)
 var _selected_index: int = 0     # currently selected slot index
+## Live tween for the select pop so a rapid re-tap kills the prior one (no compounding scale).
+var _pop_tween: Tween = null
 
 
 ## Configure the tray with the data tables (used only for display names). Idempotent.
@@ -33,7 +36,11 @@ func configure(tables: Dictionary) -> void:
 ## Pure view rebuild; called by the controller whenever the tray or selection changes.
 func rebuild(slots: Array, selected_id: String) -> void:
 	_slot_ids.clear()
+	# remove_child FIRST so the tree's child set is consistent SYNCHRONOUSLY (queue_free alone is
+	# deferred to end-of-frame — a same-frame rebuild would otherwise stack zombie children and make
+	# get_child_count() diverge from the slot count). queue_free then reclaims them next frame.
 	for child in get_children():
+		remove_child(child)
 		child.queue_free()
 
 	for i in range(slots.size()):
@@ -45,6 +52,53 @@ func rebuild(slots: Array, selected_id: String) -> void:
 			_selected_index = i
 		var button := _make_slot_button(charge_id, count, charge_id == selected_id)
 		add_child(button)
+
+
+## Selection-ONLY change (v0.5 arcade pass): re-cue the slots for the new selection and POP the
+## tapped slot (scale 1.0→1.18→1.0 + a brief upward bounce) IN PLACE — no queue_free/rebuild of the
+## row, so the row never flickers and an animation can actually play. Keeps the static border/elevation
+## cue (the AC-5.8.2 non-color signal) on the now-selected slot. The slot-SET path stays rebuild().
+## At motion ~0 (reduced motion) it re-cues with no pop. Safe if the id isn't present (no-op pop).
+func set_selected(charge_id: String, motion: float = 1.0) -> void:
+	var children: Array = get_children()
+	if children.is_empty():
+		return
+	var sel_index: int = -1
+	for i in range(_slot_ids.size()):
+		if i < children.size() and str(_slot_ids[i]) == charge_id:
+			sel_index = i
+	if sel_index < 0:
+		return
+	_selected_index = sel_index
+	# Re-apply the non-color cue to every slot for the new selection (border thickness + base
+	# elevation). This also re-bases position.y so the pop animates from the resting elevation.
+	for i in range(children.size()):
+		var b := children[i] as Button
+		if b == null:
+			continue
+		_style_slot(b, i == sel_index)
+	var sel_btn := children[sel_index] as Button
+	if sel_btn == null:
+		return
+	if _pop_tween != null and _pop_tween.is_valid():
+		_pop_tween.kill()
+	if clampf(motion, 0.0, 1.0) <= 0.01:
+		return  # reduced motion: cue updated, no pop
+	sel_btn.pivot_offset = sel_btn.size * 0.5
+	var base_y: float = sel_btn.position.y          # the selected resting elevation (-6)
+	var seconds: float = Registry.ui_tray_pop_seconds(_tables) if not _tables.is_empty() else 0.14
+	var half: float = maxf(0.01, seconds * 0.5)
+	sel_btn.scale = Vector2.ONE
+	_pop_tween = create_tween()
+	_pop_tween.set_parallel(true)
+	_pop_tween.tween_property(sel_btn, "scale", Vector2(1.18, 1.18), half) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_pop_tween.tween_property(sel_btn, "position:y", base_y - 4.0, half) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_pop_tween.chain().tween_property(sel_btn, "scale", Vector2.ONE, half) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_pop_tween.parallel().tween_property(sel_btn, "position:y", base_y, half) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _make_slot_button(charge_id: String, count: int, is_selected: bool) -> Button:
@@ -66,8 +120,16 @@ func _make_slot_button(charge_id: String, count: int, is_selected: bool) -> Butt
 	var tier_glyph: String = "◆".repeat(tier)
 	b.text = "%s\n%s  %s" % [label, count_text, tier_glyph]
 	b.clip_text = true
-	# Non-color selection cue (AC-5.8.2): a thick border + slight upward elevation on
-	# the selected slot; unselected slots get a thin border. No color-only signalling.
+	_style_slot(b, is_selected)
+	b.pressed.connect(_on_slot_pressed.bind(charge_id))
+	return b
+
+
+## Apply the non-color SELECTION cue (AC-5.8.2 / AC-5.10.2) to a slot button: a thick border (shape)
+## + a slight upward elevation on the selected slot; a thin border + ground level otherwise. No
+## color-only signalling (the bg color is identical for both). Shared by rebuild + set_selected so the
+## selected/unselected look is identical whether the row was rebuilt or only the selection changed.
+func _style_slot(b: Button, is_selected: bool) -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.16, 0.16, 0.2)
 	var border: int = 4 if is_selected else 1
@@ -79,8 +141,6 @@ func _make_slot_button(charge_id: String, count: int, is_selected: bool) -> Butt
 	b.add_theme_stylebox_override("normal", sb)
 	b.add_theme_stylebox_override("hover", sb)
 	b.position.y = -6.0 if is_selected else 0.0  # elevation cue
-	b.pressed.connect(_on_slot_pressed.bind(charge_id))
-	return b
 
 
 func _display_name(charge_id: String) -> String:

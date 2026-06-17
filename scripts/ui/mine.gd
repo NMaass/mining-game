@@ -34,6 +34,9 @@ const EXPLOSION_SCENE := preload("res://scenes/explosion.tscn")
 const DEBRIS_SCENE := preload("res://scenes/debris_particles.tscn")
 const RELIC_PULSE_SCENE := preload("res://scenes/relic_pulse.tscn")
 const CHARGE_TRAIL_SCENE := preload("res://scenes/charge_trail.tscn")
+const MUZZLE_FLASH_SCENE := preload("res://scenes/muzzle_flash.tscn")
+const VALUE_POPUP_SCENE := preload("res://scenes/value_popup.tscn")
+const COIN_PICKUP_SCENE := preload("res://scenes/coin_pickup.tscn")
 const CHUNK_WINDOW_HALF := 3
 ## Floor on cosmetic explosion particles at the lowest motion-intensity setting — keeps the
 ## detonation readable (a minimal puff) for reduced-motion players without disabling the cue
@@ -45,12 +48,12 @@ const EXPLOSION_MOTION_FLOOR := 0.12
 
 # ── Authored node references (resolved in _ready from mine.tscn) ───────────────
 @onready var _block_layer: TileMapLayer = get_node_or_null("BlockGrid/BlockLayer")
-@onready var _glyph_layer: TileMapLayer = get_node_or_null("BlockGrid/GlyphLayer")
 @onready var _crack_layer: TileMapLayer = get_node_or_null("BlockGrid/CrackLayer")
 @onready var _shaft_guide: ShaftGuide = get_node_or_null("ShaftGuide")
 @onready var _light_mask: ColorRect = get_node_or_null("LightMaskLayer/LightMask")
 @onready var _platform: Platform = get_node_or_null("Platform")
 @onready var _preview_line: Line2D = get_node_or_null("AimPreview")
+@onready var _aim_reticle: Sprite2D = get_node_or_null("AimReticle")
 @onready var _hud: Hud = get_node_or_null("Hud")
 @onready var _tray: TrayUi = get_node_or_null("Hud/Bottom/TrayScroll/Tray")
 @onready var _throw_button: Button = get_node_or_null("Hud/Bottom/ThrowButton")
@@ -71,6 +74,13 @@ var _settings: SettingsState
 # ── Per-throw transient state ─────────────────────────────────────────────────
 var _active_charge: Charge = null
 var _last_banked: int = 0
+## Live count of floating "+$N" value popups, so a wide ore vein can't spam labels past
+## vfx.popup_max_active (decremented when each popup's ttl frees it).
+var _active_popups: int = 0
+## Live count of flying reward coins (v0.5 money juice), capped at coin_max_active so a wide ore
+## vein can't spawn unbounded coin sprites on the single-threaded web budget; over-budget credits
+## still land in the rolling count-up. Decremented when each coin's ttl frees it.
+var _active_coins: int = 0
 
 # ── Layout (all from /data) ───────────────────────────────────────────────────
 var _bps: int = 64
@@ -85,12 +95,13 @@ var _fuzz_pct: float = 0.0
 # so a dig's blasts are reproducible from the run seed (AC-5.2.3/5.2.4). ──────────
 var _blast_rng := RandomNumberGenerator.new()
 
-# ── TileSet view mapping (block id → atlas coord). Resolved from the authored
-# BlockLayer.tile_set so the controller stays a VIEW, not the asset author. ───────
-var _atlas_for: Dictionary = {}        # block_id → Vector2i (BlockLayer atlas coord)
-var _glyph_atlas_for: Dictionary = {}  # block_id → Vector2i (GlyphLayer atlas coord)
+# ── TileSet view mapping (block id → atlas column). Resolved from the authored
+# BlockLayer.tile_set so the controller stays a VIEW, not the asset author. With v0.5
+# tile variation each type owns a CONTIGUOUS RANGE of columns (one per variant tile); the
+# base column + variant count let _render_cell pick a stable per-cell variant. ───────
+var _atlas_base_col: Dictionary = {}   # block_id → int (first BlockLayer atlas column)
+var _atlas_variants: Dictionary = {}   # block_id → int (number of variant columns, >= 1)
 var _source_id: int = 0
-var _glyph_source_id: int = 0
 var _crack_source_id: int = 0
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -171,41 +182,39 @@ func boot() -> void:
 # WIRING (the authored nodes → the systems)
 # ══════════════════════════════════════════════════════════════════════════════
 
-## Resolve block-id → atlas coordinate for the BlockLayer (color) and GlyphLayer (shape)
-## from the authored TileSets. The scene authors the tiles + physics; the controller just
-## learns which atlas coord each block id maps to. Block columns follow BlockArt's single
-## rendered-id order (so the generated color strip lines up); glyph columns follow the
-## shared glyph order (so two block types could share a glyph — AC-5.10.2's overlay layer).
+## Resolve block-id → atlas coordinate for the BlockLayer (color) from the authored TileSet.
+## The scene authors the tiles + physics; the controller just learns which atlas coord each
+## block id maps to. Block columns follow BlockArt's rendered-id order (so the generated
+## color strip lines up). The debug-grid glyph overlay layer was removed (v0.5 arcade pass);
+## non-color identity now rides the textured tile + the luminance-contrast gate.
 func _build_atlas_mapping() -> void:
-	_atlas_for.clear()
-	_glyph_atlas_for.clear()
+	_atlas_base_col.clear()
+	_atlas_variants.clear()
 	if _block_layer == null or _block_layer.tile_set == null:
 		return
 	var ts: TileSet = _block_layer.tile_set
 	if ts.get_source_count() > 0:
 		_source_id = ts.get_source_id(0)
+	# Each type owns a contiguous block of columns (one per variant tile); the generated strip
+	# (BlockArt.sourced_block_strip_image) uses the same per-type widths so the columns line up.
 	var col: int = 0
 	for id in BlockArt.rendered_block_ids(_tables):
-		_atlas_for[id] = Vector2i(col, 0)
-		var gi: int = BlockArt.glyph_index(_tables, str(id))
-		if gi >= 0:
-			_glyph_atlas_for[id] = Vector2i(gi, 0)
-		col += 1
-	if _glyph_layer != null and _glyph_layer.tile_set != null and _glyph_layer.tile_set.get_source_count() > 0:
-		_glyph_source_id = _glyph_layer.tile_set.get_source_id(0)
+		var vcount: int = BlockArt.variant_count(_tables, str(id))
+		_atlas_base_col[id] = col
+		_atlas_variants[id] = vcount
+		col += vcount
 	if _crack_layer != null and _crack_layer.tile_set != null and _crack_layer.tile_set.get_source_count() > 0:
 		_crack_source_id = _crack_layer.tile_set.get_source_id(0)
 
 
 ## Swap procedurally-generated art (BlockArt) onto the authored atlas sources. The authored
 ## physics polygons survive a texture swap (verified), so the BlockLayer keeps its colliders
-## (AC-5.1.6) while gaining real per-type COLOR (AC-5.10.3); the GlyphLayer gains the shared
-## non-color SHAPE overlay (AC-5.10.2); the CrackLayer gets visible fracture stages. This is
-## the same "synthesize the placeholder asset in code" approach as the audio autoload.
+## (AC-5.1.6) while gaining real per-type COLOR / sourced pixel-art tiles (AC-5.10.3); the
+## CrackLayer gets visible fracture stages. This is the same "synthesize the placeholder asset
+## in code" approach as the audio autoload. (The debug-grid glyph overlay was removed in v0.5.)
 func _apply_generated_art() -> void:
 	var ordered: Array = BlockArt.rendered_block_ids(_tables)
 	_swap_atlas_texture(_block_layer, BlockArt.build_block_strip(_tables, ordered, _bps))
-	_swap_atlas_texture(_glyph_layer, BlockArt.build_glyph_strip(_tables, _bps))
 	_swap_atlas_texture(_crack_layer, BlockArt.build_crack_strip(Registry.crack_stages(_tables), _bps))
 
 
@@ -246,11 +255,13 @@ func _wire_ui() -> void:
 	if _buy_pack_button != null and not _buy_pack_button.pressed.is_connected(_on_buy_pack_button):
 		_buy_pack_button.pressed.connect(_on_buy_pack_button)
 	if _dig_end_panel != null:
+		_dig_end_panel.configure(_tables)  # data-driven pop-in duration
 		if not _dig_end_panel.buy_upgrade_pressed.is_connected(_on_panel_buy_upgrade):
 			_dig_end_panel.buy_upgrade_pressed.connect(_on_panel_buy_upgrade)
 		if not _dig_end_panel.next_dig_pressed.is_connected(_on_panel_next_dig):
 			_dig_end_panel.next_dig_pressed.connect(_on_panel_next_dig)
 	if _prestige_offer != null:
+		_prestige_offer.configure(_tables)  # data-driven pop-in duration
 		if not _prestige_offer.accepted.is_connected(_on_prestige_accepted):
 			_prestige_offer.accepted.connect(_on_prestige_accepted)
 		if not _prestige_offer.declined.is_connected(_on_prestige_declined):
@@ -274,6 +285,9 @@ func _wire_world_guides() -> void:
 			mat.set_shader_parameter("radius_px", Registry.light_radius_px(_tables))
 			mat.set_shader_parameter("softness_px", Registry.light_softness_px(_tables))
 			mat.set_shader_parameter("dim_alpha", Registry.light_dim_alpha(_tables))
+			# Warm/cool headlamp: the unlit mine fades toward a cool atmospheric tint, not
+			# pure black (data-driven; AC-5.10.2 atmosphere). The mask alpha is the vignette.
+			mat.set_shader_parameter("dark_tint", Registry.light_dark_tint(_tables))
 		_update_light_mask()
 
 
@@ -289,12 +303,13 @@ func _on_nav_pressed() -> void:
 func _on_end_dig_pressed() -> void:
 	if _run_state.relic_collected:
 		if _prestige_offer != null:
-			_prestige_offer.show_offer()
+			_prestige_offer.show_offer(_motion_intensity())
 	else:
 		# No relic yet: end the dig without prestige (soft abort).
 		_run_state.end_dig()
 		if _dig_end_panel != null:
-			_dig_end_panel.show_dig_end(0, _run_state.total_prestige, _run_state.prestige.blast_intensity_mult())
+			_dig_end_panel.show_dig_end(0, _run_state.total_prestige,
+				_run_state.prestige.blast_intensity_mult(), _motion_intensity())
 		if _aim != null:
 			_aim.set_enabled(false)
 	_refresh_all_ui()
@@ -347,11 +362,19 @@ func _on_relic_collected(cell: Vector2i) -> void:
 	_run_state.relic_found()
 	Audio.play_relic_found()
 	_spawn_relic_pulse(cell)
+	# A longer hit-stop on the relic break — the dig's climax lands with a deeper freeze.
+	# Fire-and-forget (self-restores time_scale); gated on motion + paused inside _hit_stop.
+	_hit_stop(Registry.vfx_f(_tables, "hitstop_relic_seconds", 0.16))
+	var motion: float = _motion_intensity()
 	if _hud != null:
-		_hud.set_relic_progress(true)
+		# Relic-found beat (v0.5 arcade pass): pulse the relic chip + a warm-gold screen wash. Both
+		# motion-gated (the flash alpha is a11y-capped + scaled by motion → safe for AC-5.10.4).
+		_hud.set_relic_progress(true, motion)
+		_hud.flash(Color(1.0, 0.85, 0.4), Registry.ui_flash_alpha(_tables),
+			Registry.ui_flash_seconds(_tables), motion)
 		_hud.set_end_dig_visible(true, "PRESTIGE")
 	if _prestige_offer != null:
-		_prestige_offer.show_offer()
+		_prestige_offer.show_offer(motion)
 	else:
 		# Headless / no-UI fallback: auto-accept the prestige offer.
 		_accept_prestige()
@@ -368,15 +391,21 @@ func _accept_prestige() -> void:
 	_run_state.end_dig()
 	_last_banked = _run_state.total_prestige - before
 	_save_progress()  # autosave at the dig/prestige boundary (AC-5.11.4)
+	var motion: float = _motion_intensity()
 	if _last_banked > 0:
 		Audio.play_prestige_banked()
+		# Prestige-banked beat (v0.5 arcade pass): a brighter wash than the relic-found one. Same
+		# a11y-capped + motion-gated flash. Only fires when a point was actually banked.
+		if _hud != null:
+			_hud.flash(Color(1.0, 0.95, 0.7), Registry.ui_flash_alpha(_tables),
+				Registry.ui_flash_seconds(_tables), motion)
 	if _aim != null:
 		_aim.set_enabled(false)
 	if _hud != null:
 		_hud.set_end_dig_visible(false)
 	if _dig_end_panel != null:
 		_dig_end_panel.show_dig_end(
-			_last_banked, _run_state.total_prestige, _run_state.prestige.blast_intensity_mult()
+			_last_banked, _run_state.total_prestige, _run_state.prestige.blast_intensity_mult(), motion
 		)
 	_refresh_all_ui()
 
@@ -405,12 +434,18 @@ func _muzzle_position() -> Vector2:
 
 
 ## Redraw the initial-arc preview (pre-first-bounce only, AC-5.3.1). Uses the live grid
-## as the surface test so the hint stops at the first solid cell it would enter.
+## as the surface test so the hint stops at the first solid cell it would enter. The PURE
+## preview math (_aim.preview_path → Aim.initial_arc) is untouched (AC-5.3.x stays gate-free);
+## only the cosmetic presentation — line width (feel.aim_line_width), full opacity, and a pulsing
+## reticle parked on the predicted first-bounce cell — is layered on here.
 func _update_preview() -> void:
 	if _preview_line == null or _aim == null:
 		return
+	# A throw is committing — let _begin_aim_fade_out animate the line away; don't snap it back.
+	if _aim_fading:
+		return
 	if _run_state.dig_ended or _active_charge != null:
-		_preview_line.clear_points()
+		_clear_preview()
 		return
 	var params := ThrowParams.from_explosive(_tables, _run_state.selected_id)
 	var is_solid := func(cell: Vector2i) -> bool:
@@ -418,16 +453,108 @@ func _update_preview() -> void:
 	var path: PackedVector2Array = _aim.preview_path(
 		params, _muzzle_position(), is_solid, 240, _bps
 	)
+	# Reset the cosmetic state the fade-out / a previous throw may have left dimmed.
+	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
+	_preview_line.self_modulate = Color(1, 1, 1, 1)
 	_preview_line.clear_points()
 	for p in path:
 		_preview_line.add_point(p)
+	# Reticle: park it on the predicted first-bounce cell (the LAST preview point) while aiming,
+	# so the player sees exactly where the throw lands. Hidden once there is no aimable path.
+	if _aim_reticle != null:
+		if path.size() > 0:
+			_aim_reticle.position = path[path.size() - 1]
+			_aim_reticle.visible = true
+		else:
+			_aim_reticle.visible = false
+
+
+## Hide the aim line + reticle (no throw in progress). Snap-clears — used when the preview is
+## simply invalid (dig ended / charge in flight). The animated fade lives in _begin_aim_fade_out.
+func _clear_preview() -> void:
+	if _preview_line != null:
+		_preview_line.clear_points()
+	if _aim_reticle != null:
+		_aim_reticle.visible = false
+
+
+# ── Animated aim line: marching-dash scroll + throw fade-out (v0.5 arcade pass) ──
+## True WHILE a throw's fade-out tween is animating the line away — so _update_preview won't
+## re-snap the freshly-thrown line back to full while it fades.
+var _aim_fading: bool = false
+## Accumulated time for the marching-dash texture scroll + reticle pulse (advanced in _process,
+## ONLY while dragging). _process does not run while the tree is paused (the Settings overlay
+## pauses it), so the dash naturally freezes during a pause; motion-intensity 0 also freezes it.
+var _aim_dash_t: float = 0.0
+
+
+## Per-frame cosmetic animation for the aim line + reticle, gated on `is_dragging` (so it costs
+## nothing when not aiming) and on the motion-intensity accessibility setting (motion 0 → a still
+## line, no scroll/pulse — the reduced-motion contract). Tolerates pause implicitly: _process is
+## suspended while the tree is paused, so nothing here runs during the Settings overlay. Called from
+## the single _process (which also drives the light mask).
+func _animate_aim_line(delta: float) -> void:
+	if _aim == null or not _aim.is_dragging:
+		return
+	if _preview_line == null:
+		return
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0:
+		# Reduced motion: hold a static, fully-opaque line + steady reticle (no march/pulse).
+		_preview_line.self_modulate = Color(1, 1, 1, 1)
+		if _aim_reticle != null:
+			_aim_reticle.scale = Vector2(0.22, 0.22)
+		return
+	var scroll: float = Registry.feel_f(_tables, "aim_scroll_speed", 60.0)
+	_aim_dash_t += delta * scroll
+	# "Marching" aim feedback: a gentle opacity shimmer (driven by the data-tuned scroll speed) reads
+	# as a live, active aim line crawling toward the impact — without shipping a dash-texture asset.
+	# The gradient fade (muzzle → tip) is baked into the authored Line2D gradient.
+	var shimmer: float = 0.78 + 0.22 * sin(_aim_dash_t * 0.12)
+	_preview_line.self_modulate = Color(1, 1, 1, shimmer)
+	# Reticle pulse: a small breathing scale so the impact marker feels alive while aiming.
+	if _aim_reticle != null and _aim_reticle.visible:
+		var pulse: float = 0.22 * (1.0 + 0.18 * sin(_aim_dash_t * 0.16))
+		_aim_reticle.scale = Vector2(pulse, pulse)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # THROW (button + headless-drivable)
 # ══════════════════════════════════════════════════════════════════════════════
 
 func _on_throw_button() -> void:
+	# Button squash-then-pop BEFORE throw_at (which disables the button via _refresh_all_ui). The
+	# tween is fire-and-forget on the button node itself — disabling it does not kill an in-flight
+	# scale tween — so the squash plays even though the throw immediately greys the button out.
+	_squash_throw_button()
 	throw_at(_aim.angle if _aim != null else 0.0)
+
+
+## Live THROW-button squash tween (kept so a rapid second press restarts cleanly without stacking).
+var _throw_btn_tween: Tween = null
+
+## Squash the THROW button on press, then pop it past 1.0 before settling (a tactile click).
+## Runs BEFORE the throw disables the button. Gated on motion intensity (motion 0 → no squash —
+## the button just greys out). All magnitudes are /data (feel.throw_button_squash / _pop_seconds).
+func _squash_throw_button() -> void:
+	if _throw_button == null:
+		return
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0:
+		return
+	var squash: float = Registry.feel_f(_tables, "throw_button_squash", 0.86)
+	var pop_s: float = Registry.feel_f(_tables, "throw_button_pop_seconds", 0.12)
+	# Pivot at the button center so it scales in place (not from the top-left corner).
+	_throw_button.pivot_offset = _throw_button.size * 0.5
+	var down := Vector2(squash + 0.04, squash)  # compress mostly vertically (a "press")
+	# Kill any prior squash so rapid throws don't stack tweens / strand the scale off 1.0.
+	if _throw_btn_tween != null and _throw_btn_tween.is_valid():
+		_throw_btn_tween.kill()
+	_throw_button.scale = Vector2.ONE
+	_throw_btn_tween = create_tween()
+	_throw_btn_tween.tween_property(_throw_button, "scale", down, pop_s * 0.4) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	_throw_btn_tween.tween_property(_throw_button, "scale", Vector2.ONE, pop_s * 0.6) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
 ## Throw the selected charge at `angle`. Spawns it as a Rapier RigidBody at the muzzle
@@ -444,15 +571,92 @@ func throw_at(angle: float) -> Charge:
 	charge.setup(params, _muzzle_position(), _bps)
 	charge.detonated.connect(_on_charge_detonated)
 	add_child(charge)
-	# Smoke trail for readable flight path and throw satisfaction.
+	# Comet trail for a readable flight path + throw satisfaction (global-coords streak, web-safe COLOR).
 	var trail: CPUParticles2D = CHARGE_TRAIL_SCENE.instantiate()
 	charge.add_child(trail)
 	charge.launch(angle)
+	# Launch cue (v0.5 arcade audio): a short airy upward whoosh on release — this moment was silent
+	# before. Co-located with the visual launch pop below.
+	Audio.play_throw()  # AC-5.13.1
 	_active_charge = charge
-	if _preview_line != null:
-		_preview_line.clear_points()
+	# LAUNCH POP: a muzzle flash at the launch point + a platform-deck recoil opposite the throw.
+	# Both are cosmetic, capped/ttl-freed, and gated on motion intensity (motion 0 → no flash/kick).
+	_spawn_muzzle_flash(angle)
+	_recoil_platform(angle)
+	# Fade the aim line out (don't snap it) so the throw reads as a release, not a hard cut.
+	_begin_aim_fade_out()
 	_refresh_all_ui()
 	return charge
+
+
+## Spawn a one-shot muzzle flash at the launch point (the platform muzzle). It is a GPUParticles2D
+## whose spray COLOR rides a ParticleProcessMaterial color_ramp (+ an additive Flash sprite) — the
+## web-safe pattern (no bare process shader), so it renders on the GL Compatibility / WebGL2 build.
+## Cosmetic + ttl-freed → 0 orphans at exit. Gated on motion intensity (motion 0 → no flash). The
+## burst size is /data (feel.muzzle_flash_particles), scaled by motion like the explosion spray.
+func _spawn_muzzle_flash(angle: float) -> void:
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0:
+		return
+	var fx: GPUParticles2D = MUZZLE_FLASH_SCENE.instantiate()
+	fx.position = _muzzle_position()
+	# Point the flash along the launch direction (0 = straight down) so it reads as a barrel blast.
+	fx.rotation = angle
+	fx.z_index = 10
+	var base: int = Registry.feel_i(_tables, "muzzle_flash_particles", fx.amount)
+	fx.amount = explosion_particle_count(base, motion)
+	add_child(fx)
+	fx.emitting = true
+	# Free after the one-shot's lifetime (honors the ttl-free pattern; survives a pause/time-scale).
+	var ttl: float = fx.lifetime + 0.2
+	get_tree().create_timer(ttl, true, false, true).timeout.connect(fx.queue_free)
+
+
+## Kick the platform deck opposite the launch direction (a launch recoil). Delegates to the
+## Platform (which writes ONLY the Body/Visual child — never the body/collider/muzzle/camera, so
+## AC-5.7.x stays green). Gated + scaled by motion intensity (motion 0 → no kick). Distance /data.
+func _recoil_platform(angle: float) -> void:
+	if _platform == null:
+		return
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0:
+		return
+	_platform.recoil(angle, Registry.feel_f(_tables, "recoil_px", 6.0) * motion)
+
+
+## Fade the aim line + reticle out on throw (a soft release, not the old instant clear_points).
+## Tweens the line width + opacity (and the reticle alpha) to 0, then snap-clears. Gated on motion:
+## at motion 0 it just snap-clears (reduced motion). The `_aim_fading` flag stops _update_preview
+## from re-snapping the line back to full mid-fade.
+func _begin_aim_fade_out() -> void:
+	if _preview_line == null:
+		_clear_preview()
+		return
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0 or _preview_line.get_point_count() == 0:
+		_clear_preview()
+		return
+	_aim_fading = true
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(_preview_line, "self_modulate:a", 0.0, 0.18).set_ease(Tween.EASE_OUT)
+	t.tween_property(_preview_line, "width", 0.0, 0.18).set_ease(Tween.EASE_OUT)
+	if _aim_reticle != null and _aim_reticle.visible:
+		t.tween_property(_aim_reticle, "modulate:a", 0.0, 0.18).set_ease(Tween.EASE_OUT)
+	t.chain().tween_callback(_finish_aim_fade_out)
+
+
+## End the throw fade: snap the line + reticle clean and restore their cosmetic state so the NEXT
+## aim draws bright again (_update_preview also resets width/opacity, but restore here too in case
+## the next draw is gated off, e.g. dig ended).
+func _finish_aim_fade_out() -> void:
+	_aim_fading = false
+	_clear_preview()
+	if _preview_line != null:
+		_preview_line.self_modulate = Color(1, 1, 1, 1)
+		_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
+	if _aim_reticle != null:
+		_aim_reticle.modulate.a = 0.9
 
 
 ## Select a tray charge (AC-5.3.6). Free charge is always selectable.
@@ -513,30 +717,71 @@ func resolve_blast(center_cell: Vector2i, params: ThrowParams) -> Dictionary:
 
 	_grid.apply_blast(result)
 
+	# Credit cleared ore once per cell (AC-5.5.1), capturing the PER-CELL value so a credited
+	# ore cell can throw a material-tinted "+$N" popup (the per-cell value was summed-and-discarded
+	# before the v0.5 arcade pass).
 	var credited: int = 0
+	var cell_credit: Dictionary = {}  # Vector2i → int credited at that cell
 	for cell in result["cleared"]:
-		credited += _economy.credit(cell, pre_ids.get(cell, "air"))
+		var got: int = _economy.credit(cell, pre_ids.get(cell, "air"))
+		credited += got
+		if got > 0:
+			cell_credit[cell] = got
+	# Money was credited this blast → the end-of-pipeline _refresh_all_ui rolls the readout (v0.5
+	# money juice) instead of snapping; a $0 blast leaves it snapping. The roll/coins are gated on
+	# motion intensity inside the HUD/coin path.
+	if credited > 0:
+		_animate_money_next_refresh = true
 
-	_spawn_explosion(center_cell)  # plays the detonate cue
-	_shake_camera()
+	var cleared_count: int = (result["cleared"] as Array).size()
+	var blast_world_center := Vector2(
+		float(center_cell.x * _bps) + float(_bps) * 0.5,
+		float(center_cell.y * _bps) + float(_bps) * 0.5
+	)
 
-	# Material-specific debris for ore blocks and a central dust puff.
-	var debris_count: int = 0
-	const MAX_DEBRIS: int = 16
+	_spawn_explosion(center_cell, radius)  # plays the detonate cue
+	# Camera weight: trauma scaled by cleared-cell count (big breaks shake harder + longer),
+	# kicked AWAY from the impact, plus a brief zoom punch. Both gated on motion intensity
+	# (motion 0 → still frame). Writes camera.offset/zoom only, never position (AC-5.7.3).
+	_shake_camera(cleared_count, blast_world_center, radius)
+
+	# Per-cell debris for EVERY cleared solid cell (dirt/rock chunks now fly too, not just ore),
+	# tinted by the cell's material (BlockArt.block_color). Capped at vfx.max_debris_emitters for
+	# the web budget, preferring cells NEAREST the blast center over budget so the dust reads at
+	# the impact even on a wide vein.
+	var max_debris: int = Registry.vfx_i(_tables, "max_debris_emitters", 24)
+	var cleared_solid: Array = []
 	for cell in result["cleared"]:
 		var cleared_id: String = pre_ids.get(cell, "air")
-		if cleared_id == "ore_copper" or cleared_id == "ore_gold":
-			if debris_count < MAX_DEBRIS:
-				_spawn_debris(cell, cleared_id)
-				debris_count += 1
+		if cleared_id != "air":
+			cleared_solid.append(cell)
+	# Nearest-center-first ordering (distance² is enough — avoids the sqrt).
+	cleared_solid.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return (a - center_cell).length_squared() < (b - center_cell).length_squared()
+	)
+	var debris_count: int = 0
+	for cell in cleared_solid:
+		if debris_count >= max_debris:
+			break
+		_spawn_debris(cell, pre_ids.get(cell, "air"))
+		debris_count += 1
 	if debris_count == 0 and not (result["cleared"] as Array).is_empty():
-		# Even if no ore broke, emit a small dust puff at the blast center.
+		# All cleared cells were air (rare): emit a small dust puff at the blast center.
 		_spawn_debris(center_cell, _grid.get_block_id(center_cell.x, center_cell.y))
 
-	# Placeholder SFX (AC-5.13.1): break if any cell broke, else crack if any was only
-	# chipped; an ore ping when value was credited. Detonate is played by _spawn_explosion.
+	# Floating "+$N" value popups + flying reward coins at each credited ore cell (skip $0 dirt
+	# breaks). Both capped (vfx.popup_max_active / coin_max_active) so a wide ore vein doesn't spam
+	# the screen; caps are honored live via the _active_* counters (decremented on ttl free). Tinted
+	# per-ore by the material color. The coins home to the wallet icon and pop the money HUD on arrival.
+	for cell in cell_credit:
+		_spawn_value_popup(cell, int(cell_credit[cell]), pre_ids.get(cell, "air"))
+		_spawn_coin(cell, pre_ids.get(cell, "air"))
+
+	# Placeholder SFX (AC-5.13.1): a rising-pitch break RATTLE scaled by the cleared-cell count (the
+	# arcade arpeggio — a wide break sounds bigger than a single tap), else a crack if any cell was
+	# only chipped; an ore ping when value was credited. Detonate is played (layered) by _spawn_explosion.
 	if not (result["cleared"] as Array).is_empty():
-		Audio.play_break()
+		Audio.play_break_combo(cleared_count)
 	elif not (result["damaged"] as Dictionary).is_empty():
 		Audio.play_crack()
 	if credited > 0:
@@ -548,6 +793,13 @@ func resolve_blast(center_cell: Vector2i, params: ThrowParams) -> Dictionary:
 	_check_descent()
 	_refresh_all_ui()
 	_update_preview()
+
+	# Hit-stop on a BIG break (>= vfx.hitstop_min_cells cleared) — a brief Engine.time_scale
+	# freeze that lands the "crunch". Free 1-cell taps never freeze. Fire-and-forget (NOT
+	# awaited) so resolve_blast returns the result synchronously for the smoke test; the
+	# coroutine self-restores time_scale. Gated on motion intensity inside _hit_stop.
+	if cleared_count >= Registry.vfx_i(_tables, "hitstop_min_cells", 6):
+		_hit_stop(Registry.vfx_f(_tables, "hitstop_seconds", 0.05))
 	return result
 
 
@@ -564,6 +816,13 @@ func _check_descent() -> void:
 		var center_chunk: int = _grid.cell_to_chunk(_platform.target_row)
 		_grid.update_window(center_chunk, CHUNK_WINDOW_HALF)
 		_render_all_loaded_chunks()
+		# Depth-drop beat (v0.5 arcade pass): a quick squash on the depth chip. Presentation only;
+		# bump_depth is a no-op headless and self-gates (a tween on a label, harmless if motion 0).
+		if _hud != null:
+			_hud.bump_depth()
+		# Descent cue (v0.5 arcade audio): a low mechanical thud when the platform drops — this moment
+		# was silent before. Fired once per descent regardless of step count.
+		Audio.play_descend()  # AC-5.13.1
 
 
 ## Build the {Vector2i: hp} grid for the rows just beneath `row` (descent lookahead).
@@ -611,8 +870,6 @@ func _render_all_loaded_chunks() -> void:
 	if _block_layer == null:
 		return
 	_block_layer.clear()
-	if _glyph_layer != null:
-		_glyph_layer.clear()
 	if _crack_layer != null:
 		_crack_layer.clear()
 	for chunk_y in _grid.loaded_chunks():
@@ -634,21 +891,17 @@ func _render_cell(cell_x: int, cell_y: int) -> void:
 
 	if block_id == "air" or hp <= 0:
 		_block_layer.erase_cell(cell)
-		if _glyph_layer != null:
-			_glyph_layer.erase_cell(cell)
 		if _crack_layer != null:
 			_crack_layer.erase_cell(cell)
 		return
 
-	var atlas: Vector2i = _atlas_for.get(block_id, Vector2i(0, 0))
-	_block_layer.set_cell(cell, _source_id, atlas)
-
-	# Non-color identity overlay (AC-5.10.2): the block's glyph on the shared GlyphLayer.
-	if _glyph_layer != null:
-		if _glyph_atlas_for.has(block_id):
-			_glyph_layer.set_cell(cell, _glyph_source_id, _glyph_atlas_for[block_id])
-		else:
-			_glyph_layer.erase_cell(cell)
+	# Pick a stable per-cell tile variant inside this type's column range (v0.5 tile variation):
+	# variant_for is a pure spatial hash of the cell, so a re-render after a descent never flickers
+	# but adjacent same-type cells differ (no single repeating stamp). One variant → always col 0.
+	var base_col: int = int(_atlas_base_col.get(block_id, 0))
+	var vcount: int = int(_atlas_variants.get(block_id, 1))
+	var variant: int = BlockArt.variant_for(block_id, cell, vcount)
+	_block_layer.set_cell(cell, _source_id, Vector2i(base_col + variant, 0))
 
 	if _crack_layer == null:
 		return
@@ -663,15 +916,68 @@ func _render_cell(cell_x: int, cell_y: int) -> void:
 	else:
 		_crack_layer.erase_cell(cell)
 
-## Short screenshake scaled by the motion-intensity accessibility slider. Kept
-## separate from blast logic so disabling/reducing motion never affects gameplay.
-func _shake_camera() -> void:
+## Trauma-based screenshake + zoom punch, scaled by the cleared-cell count and the
+## motion-intensity accessibility slider. Kept separate from blast logic so disabling/
+## reducing motion never affects gameplay. ALL magnitudes are /data (Registry.vfx_*):
+## trauma = (shake_base + shake_per_cell·cleared) · motion (so a megablast kicks far
+## harder than a free tap), and the zoom punch scales with the blast radius. The kick is
+## aimed AWAY from `blast_world_center`. The Platform writes camera.offset/zoom only —
+## never position/target (AC-5.7.3). At motion 0 trauma/zoom are 0 → a still frame.
+func _shake_camera(cleared_count: int, blast_world_center: Vector2, radius: int) -> void:
 	if _platform == null:
 		return
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
-	var intensity: float = lerpf(0.0, 12.0, motion)
-	if intensity > 0.1:
-		_platform.shake(intensity)
+	if motion <= 0.0:
+		return
+	var base: float = Registry.vfx_f(_tables, "shake_base", 0.3)
+	var per_cell: float = Registry.vfx_f(_tables, "shake_per_cell", 0.02)
+	var trauma: float = (base + per_cell * float(cleared_count)) * motion
+	_platform.add_trauma(trauma, blast_world_center)
+	_platform.zoom_punch(float(radius) * motion)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HIT-STOP (a brief global Engine.time_scale freeze on big breaks — sells weight)
+# ══════════════════════════════════════════════════════════════════════════════
+
+## Current motion-intensity accessibility value [0,1] (AC-5.10.1/5.10.4), or 1.0 if no settings are
+## bound (headless). The single read used to gate every cosmetic animation (flash/pop/bump/modal pop-in).
+func _motion_intensity() -> float:
+	return _settings.motion_intensity if _settings != null else 1.0
+
+
+## Re-entrancy guard: true WHILE a hit-stop freeze is in flight, so two overlapping big
+## blasts can't stack freezes (and so a second call can't stomp the restore of the first).
+var _in_hitstop: bool = false
+
+## Briefly freeze the game (Engine.time_scale → vfx.hitstop_scale) for `seconds` of REAL
+## time, then restore time_scale to 1.0. The "crunch" lever for big breaks / the relic.
+##
+## Safety contract (a mis-restored or overlapping freeze would soft-lock the whole game):
+##  - motion gate: reduced-motion players (motion <= EXPLOSION_MOTION_FLOOR) get no freeze.
+##  - paused gate: the Settings overlay pauses the tree; never freeze while paused (the
+##    restore timer wouldn't run and the overlay would be stuck slow on resume).
+##  - re-entrancy guard (_in_hitstop): a freeze already running → no-op.
+##  - the restore timer is created with ignore_time_scale=true (4th arg) so it counts REAL
+##    seconds — otherwise it would wait seconds/scale real seconds (≈1s) and feel frozen.
+##  - time_scale is ALWAYS restored to 1.0 in every exit path; a smoke test asserts ==1.0.
+func _hit_stop(seconds: float) -> void:
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= EXPLOSION_MOTION_FLOOR:
+		return
+	if seconds <= 0.0:
+		return
+	if _in_hitstop:
+		return
+	if get_tree() == null or get_tree().paused:
+		return
+	_in_hitstop = true
+	Engine.time_scale = Registry.vfx_f(_tables, "hitstop_scale", 0.05)
+	# ignore_time_scale=true (4th arg) is MANDATORY: the timer must count REAL seconds, not
+	# scaled seconds, or the freeze lasts seconds/time_scale and soft-locks.
+	await get_tree().create_timer(seconds, true, false, true).timeout
+	Engine.time_scale = 1.0
+	_in_hitstop = false
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -688,6 +994,9 @@ func _spawn_debris(cell: Vector2i, block_id: String) -> void:
 		float(cell.y * _bps) + float(_bps) * 0.5
 	)
 	fx.z_index = 9
+	# Data-driven burst size (vfx.debris_amount_per_cell) so the chunk count is a tunable, not a
+	# scene literal. CPUParticles2D.color is the web-safe COLOR source (no process shader).
+	fx.amount = Registry.vfx_i(_tables, "debris_amount_per_cell", fx.amount)
 	var color: Color = BlockArt.block_color(_tables, block_id) if block_id != "air" else Color(0.7, 0.65, 0.6, 1.0)
 	# Slightly vary the debris color so it doesn't look like a flat stamp.
 	color = color.lightened(randf_range(0.0, 0.15))
@@ -696,6 +1005,94 @@ func _spawn_debris(cell: Vector2i, block_id: String) -> void:
 	fx.emitting = true
 	var ttl: float = fx.lifetime + 0.2
 	get_tree().create_timer(ttl).timeout.connect(fx.queue_free)
+
+
+## Spawn one floating "+$N" value popup at a credited ore cell, tinted by the cell's material.
+## Capped at vfx.popup_max_active (live count) so a wide ore vein can't spam labels; $0 dirt
+## breaks never call this (caller-gated). The popup is cosmetic + ttl-freed → 0 orphans at exit.
+func _spawn_value_popup(cell: Vector2i, amount: int, block_id: String) -> void:
+	if amount <= 0:
+		return
+	var cap: int = Registry.vfx_i(_tables, "popup_max_active", 10)
+	if _active_popups >= cap:
+		return
+	var fx: ValuePopup = VALUE_POPUP_SCENE.instantiate()
+	fx.position = Vector2(
+		float(cell.x * _bps) + float(_bps) * 0.5,
+		float(cell.y * _bps) + float(_bps) * 0.5
+	)
+	var color: Color = BlockArt.block_color(_tables, block_id) if block_id != "air" else Color(1, 1, 1, 1)
+	# Brighten the tint so the label reads on the dark mine even outside the headlamp bubble.
+	color = color.lightened(0.35)
+	color.a = 1.0
+	add_child(fx)
+	_active_popups += 1
+	fx.play(_tables, amount, color)
+	var ttl: float = Registry.vfx_f(_tables, "popup_seconds", 0.6) + 0.1
+	get_tree().create_timer(ttl).timeout.connect(_on_popup_freed.bind(fx))
+
+
+## Free a finished value popup and release its slot in the active-popup cap.
+func _on_popup_freed(fx: ValuePopup) -> void:
+	_active_popups = maxi(0, _active_popups - 1)
+	if is_instance_valid(fx):
+		fx.queue_free()
+
+
+## Spawn one flying reward coin (v0.5 money juice) at a credited ore cell. It pops up then arcs to the
+## HUD wallet icon and pops the money HUD on arrival. Capped at coin_max_active (live count) so a wide
+## vein can't spawn unbounded sprites; over-budget credits still land in the rolling count-up. Gated
+## OFF at motion intensity ~0 (reduced motion — the number still snaps). Cosmetic + ttl-freed → 0
+## orphans at exit. The coin lives in WORLD space; the wallet's screen target is projected to world
+## once (the camera barely moves over the sub-second flight).
+func _spawn_coin(cell: Vector2i, block_id: String) -> void:
+	if _hud == null:
+		return
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.01:
+		return
+	if _active_coins >= Registry.coin_max_active(_tables):
+		return
+	var start_world := Vector2(
+		float(cell.x * _bps) + float(_bps) * 0.5,
+		float(cell.y * _bps) + float(_bps) * 0.5
+	)
+	# Project the wallet icon's screen (canvas) position back into world space so the coin homes to it.
+	var screen_target: Vector2 = _hud.money_icon_screen_position()
+	var ct := get_viewport().get_canvas_transform()
+	var target_world: Vector2 = ct.affine_inverse() * screen_target
+	var color: Color = BlockArt.block_color(_tables, block_id) if block_id != "air" else Color(1, 1, 1, 1)
+	color = color.lightened(0.25)
+	color.a = 1.0
+	var coin: CoinPickup = COIN_PICKUP_SCENE.instantiate()
+	coin.z_index = 11
+	add_child(coin)
+	_active_coins += 1
+	coin.arrived.connect(_on_coin_arrived)
+	coin.play(
+		start_world, target_world, color,
+		Registry.coin_pop_seconds(_tables), Registry.coin_fly_seconds(_tables),
+		Registry.coin_arc_height_px(_tables)
+	)
+	# ttl just past the full pop+fly so a coin always frees even if a tween is interrupted. The timer
+	# is process_always + ignore_time_scale so an in-flight coin still frees if the Settings overlay
+	# pauses the tree or a hit-stop slows time mid-flight (no leaked coin). Honors the ttl-free pattern.
+	var ttl: float = Registry.coin_pop_seconds(_tables) + Registry.coin_fly_seconds(_tables) + 0.2
+	get_tree().create_timer(ttl, true, false, true).timeout.connect(_on_coin_freed.bind(coin))
+
+
+## A coin reached the wallet → pop the money HUD (the count-up already rolls; this lands the kinetic
+## reward where the player is looking).
+func _on_coin_arrived() -> void:
+	if _hud != null:
+		_hud.pop_money()
+
+
+## Free a finished coin and release its slot in the active-coin cap.
+func _on_coin_freed(coin: CoinPickup) -> void:
+	_active_coins = maxi(0, _active_coins - 1)
+	if is_instance_valid(coin):
+		coin.queue_free()
 
 
 func _spawn_relic_pulse(cell: Vector2i) -> void:
@@ -717,8 +1114,11 @@ static func explosion_particle_count(base_amount: int, motion: float) -> int:
 	return maxi(EXPLOSION_MIN_PARTICLES, int(round(float(base_amount) * factor)))
 
 
-func _spawn_explosion(center_cell: Vector2i) -> void:
-	var fx: GPUParticles2D = EXPLOSION_SCENE.instantiate()
+func _spawn_explosion(center_cell: Vector2i, radius: int = 1) -> void:
+	# The explosion is now a LAYERED Node2D (ExplosionFx): a Spark GPUParticles2D child (the
+	# web-safe color_ramp spray) plus an additive Flash + Ring scaled by the blast radius. The
+	# root stays a DIRECT child of Mine (the smoke test finds the Spark via recursive search).
+	var fx: ExplosionFx = EXPLOSION_SCENE.instantiate()
 	fx.position = Vector2(
 		float(center_cell.x * _bps) + float(_bps) * 0.5,
 		float(center_cell.y * _bps) + float(_bps) * 0.5
@@ -726,23 +1126,42 @@ func _spawn_explosion(center_cell: Vector2i) -> void:
 	fx.z_index = 10
 	# Motion-intensity (AC-5.10.1 / AC-5.10.4): scale the cosmetic particle spray. The blast
 	# GAMEPLAY already resolved (damage/credit) — only the visual intensity reduces, down to a
-	# minimal readable puff at intensity 0 (reduced motion), never zero.
+	# minimal readable puff at intensity 0 (reduced motion), never zero. The flash/ring are
+	# disabled entirely at motion 0 (handled in ExplosionFx.play).
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
-	fx.amount = explosion_particle_count(fx.amount, motion)
+	var spark: GPUParticles2D = fx.get_node_or_null("Spark")
+	if spark != null:
+		spark.amount = explosion_particle_count(spark.amount, motion)
 	add_child(fx)
-	fx.emitting = true
+	if spark != null:
+		spark.emitting = true
+	fx.play(_tables, radius, motion)  # flash + ring (scaled by radius, gated on motion)
 	Audio.play_detonate()  # AC-5.13.1: detonation cue, co-located with the visual fx
-	# Free after the particle lifetime (the scene is one-shot).
-	var ttl: float = fx.lifetime + 0.2
+	# Free after the slowest layer's lifetime (the scene is one-shot).
+	var spark_life: float = spark.lifetime if spark != null else 0.5
+	var ttl: float = maxf(spark_life, Registry.vfx_f(_tables, "ring_seconds", 0.18)) + 0.2
 	get_tree().create_timer(ttl).timeout.connect(fx.queue_free)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UI REFRESH
 # ══════════════════════════════════════════════════════════════════════════════
 
+## When true, the NEXT _refresh_all_ui rolls the money readout instead of snapping it (the live
+## credit path sets this; everything else snaps). Consumed (reset) each refresh so a later non-credit
+## refresh — boot, dig start, pack buy — keeps the canonical snap-exact behavior the tests read.
+var _animate_money_next_refresh: bool = false
+
+
 func _refresh_all_ui() -> void:
 	if _hud != null:
-		_hud.set_money(_economy.money)
+		# Money: ROLL on the live credit path (v0.5 juice), SNAP everywhere else. set_money stays the
+		# deterministic/test-read path (snap-exact); tick_money_to is the separate animated path and
+		# snaps to the exact value on finish, so the final readout is identical either way.
+		if _animate_money_next_refresh:
+			var motion: float = _settings.motion_intensity if _settings != null else 1.0
+			_hud.tick_money_to(_economy.money, motion)
+		else:
+			_hud.set_money(_economy.money)
 		var depth: int = _platform.target_row if _platform != null else _run_state.depth
 		_hud.set_depth(depth)
 		_hud.set_relic_progress(_run_state.relic_collected)
@@ -755,10 +1174,21 @@ func _refresh_all_ui() -> void:
 			_run_state.dig_ended
 			or not _economy.can_afford(int(Registry.pack(_tables, "basic").get("price", 0)))
 		)
+	# One-shot: consumed so a non-credit refresh always snaps the canonical money label.
+	_animate_money_next_refresh = false
+
+
+## Signature of the last-rendered tray SLOT SET ({id:count} per slot, in order). When only the
+## selection changes (the common case — a tap), this is unchanged, so the tray POPS the new slot in
+## place (set_selected) instead of a full queue_free/rebuild that would kill any animation + flicker
+## the row. A slot-SET change (pack buy / dig start) differs → full rebuild (v0.5 arcade pass).
+var _last_tray_signature: String = ""
 
 
 ## Rebuild the tray view from the RunState tray (collapsing duplicate finite charges
 ## into one slot with a count; the free charge is the first slot with ∞ — AC-5.8.1/2).
+## Selection-only changes are routed through TrayUi.set_selected (a non-destructive pop) so the row
+## never rebuilds on a tap; only a slot-SET change does a full rebuild.
 func _rebuild_tray() -> void:
 	if _tray == null:
 		return
@@ -771,7 +1201,22 @@ func _rebuild_tray() -> void:
 			continue
 		seen.append(id)
 		slots.append({"id": id, "count": _run_state.count_of(id)})
+	var signature: String = _tray_signature(slots)
+	if signature == _last_tray_signature and _tray.get_child_count() == slots.size():
+		# Slot set unchanged → selection-only: pop the tapped slot in place (no rebuild/flicker).
+		_tray.set_selected(_run_state.selected_id, _motion_intensity())
+		return
+	_last_tray_signature = signature
 	_tray.rebuild(slots, _run_state.selected_id)
+
+
+## Stable string signature of the tray slot SET (id+count per slot, in order) — selection-independent
+## so a re-select doesn't churn the signature. Used to decide rebuild-vs-pop.
+func _tray_signature(slots: Array) -> String:
+	var parts: Array = []
+	for s in slots:
+		parts.append("%s:%d" % [str((s as Dictionary).get("id", "")), int((s as Dictionary).get("count", 0))])
+	return "|".join(parts)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CAMERA (followed by the Platform node; only stepped here for cleanup safety)
@@ -786,8 +1231,9 @@ func _physics_process(_delta: float) -> void:
 		_refresh_all_ui()
 		_update_preview()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_update_light_mask()
+	_animate_aim_line(delta)
 
 func _update_light_mask() -> void:
 	if _light_mask == null:

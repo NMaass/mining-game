@@ -1,6 +1,6 @@
 extends SceneTree
 ## Visual-verification helper (dev-only, NOT part of the gates). Boots a scene, renders a few
-## frames, and saves a PNG so visual-only ACs (block color + glyph identity AC-5.10.2/5.10.3,
+## frames, and saves a PNG so visual-only ACs (textured block identity AC-5.10.2/5.10.3,
 ## explosion look AC-5.9.1, HUD layout) can be eyeballed and attached as honest evidence — the
 ## headless test suite proves the data path, this proves the pixels.
 ##

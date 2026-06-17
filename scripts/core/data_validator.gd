@@ -10,11 +10,10 @@ extends RefCounted
 ## here as the data model grows — every new table gets a rule, every join gets a check.
 
 const DETONATION_MODES := ["fuse_seconds", "on_first_impact", "on_rest"]
-## Glyph vocabulary for the non-color overlay (mirrors BlockArt.ALLOWED_GLYPHS; kept local so
-## the data gate stays self-contained and never depends on a class_name resolving under `-s`).
-const ALLOWED_GLYPHS := ["dots", "cross", "bricks", "circle", "diamond"]
 ## Minimum WCAG relative-luminance separation required between any two diggable block colors
-## (AC-5.10.3: contrast by luminance, not hue alone).
+## (AC-5.10.3: contrast by luminance, not hue alone). With the debug-grid glyph overlay removed
+## (v0.5 arcade pass), this luminance-delta gate is the SOLE machine-checked enforcement of
+## non-color block identity — every two block types must read apart by brightness, not just hue.
 const MIN_BLOCK_LUMINANCE_DELTA := 0.06
 
 static func validate(tables: Dictionary) -> Array:
@@ -29,6 +28,8 @@ static func validate(tables: Dictionary) -> Array:
 	_check_balance(balance, errors)
 	_check_ui(balance, errors)
 	_check_settings(balance, errors)
+	_check_vfx(balance, errors)
+	_check_feel(balance, errors)
 	_check_mine_geometry(balance, errors)
 	_check_blocks(blocks, errors)
 	_check_palette(tables.get("palette"), blocks, errors)
@@ -41,6 +42,7 @@ static func validate(tables: Dictionary) -> Array:
 	_check_generation(tables.get("generation"), errors)
 	_check_relics(tables.get("relics"), bands, balance, errors)
 	_check_prestige(tables.get("prestige"), errors)
+	_check_audio(tables.get("audio"), errors)
 	return errors
 
 static func _dict(tables: Dictionary, key: String, errors: Array) -> Dictionary:
@@ -141,6 +143,13 @@ static func _check_mine_geometry(b: Dictionary, errors: Array) -> void:
 		var alpha: float = float(b.get("light_dim_alpha", -1.0))
 		if alpha < 0.0 or alpha > 1.0:
 			errors.append("balance: 'light_dim_alpha' must be in [0,1]")
+	# light_dark_tint (v0.5 arcade pass): the cool deep-terrain cast the headlamp mask fades
+	# toward instead of pure black — must be present and a valid hex (it drives the shader's
+	# `dark_tint` uniform; a typo'd/absent value would read magenta or silently disable the cast).
+	if not b.has("light_dark_tint"):
+		errors.append("balance: missing 'light_dark_tint' (v0.5 headlamp deep-terrain cast)")
+	elif not Color.html_is_valid(str(b.get("light_dark_tint", ""))):
+		errors.append("balance: 'light_dark_tint' %s must be a valid hex color" % str(b.get("light_dark_tint", "")))
 
 ## AC-5.8.5 (portrait HUD layout). The thumb-safe touch-target minimum and the base HUD
 ## edge margin are tunables, not code literals. The touch-target floor must sit in the
@@ -159,6 +168,41 @@ static func _check_ui(b: Dictionary, errors: Array) -> void:
 		errors.append("balance: missing 'ui_edge_margin_px' (AC-5.8.5 HUD edge margin)")
 	elif float(b.get("ui_edge_margin_px", -1.0)) < 0.0:
 		errors.append("balance: 'ui_edge_margin_px' must be >= 0 (AC-5.8.5)")
+	# Money-juice tunables (v0.5 arcade pass): the rolling count-up duration + the flying-coin
+	# timings/cap/arc. All /data (tunables-are-data), each present + range-checked so a typo'd key
+	# can't silently read 0 (a 0 roll/fly would snap with no animation; a 0 cap would suppress coins).
+	# (key, strict_min?) durations are > 0; the coin cap is >= 1; the arc apex is >= 0.
+	for k in ["ui_money_roll_seconds", "coin_fly_seconds", "coin_pop_seconds"]:
+		if not b.has(k):
+			errors.append("balance: missing '%s' (v0.5 money juice)" % k)
+		elif float(b.get(k, 0.0)) <= 0.0:
+			errors.append("balance: '%s' %s must be > 0 (v0.5 money juice)" % [k, str(b.get(k))])
+	if not b.has("coin_max_active"):
+		errors.append("balance: missing 'coin_max_active' (v0.5 money juice)")
+	elif int(b.get("coin_max_active", 0)) < 1:
+		errors.append("balance: 'coin_max_active' %s must be >= 1 (v0.5 money juice)" % str(b.get("coin_max_active")))
+	if not b.has("coin_arc_height_px"):
+		errors.append("balance: missing 'coin_arc_height_px' (v0.5 money juice)")
+	elif float(b.get("coin_arc_height_px", -1.0)) < 0.0:
+		errors.append("balance: 'coin_arc_height_px' %s must be >= 0 (v0.5 money juice)" % str(b.get("coin_arc_height_px")))
+	# UI/HUD-animation tunables (v0.5 arcade pass): the modal scale-in/out durations, the
+	# relic/prestige screen-flash (peak alpha + fade), and the tray-select pop duration. All
+	# /data (tunables-are-data) + range-checked so a typo'd key can't silently read 0 (a 0
+	# duration would snap with no animation; an out-of-band flash alpha could either be invisible
+	# or a full-white strobe — capped at 1.0 for the AC-5.10.4 photosensitivity guard).
+	for k in ["ui_panel_in_seconds", "ui_panel_out_seconds", "ui_flash_seconds", "ui_tray_pop_seconds"]:
+		if not b.has(k):
+			errors.append("balance: missing '%s' (v0.5 UI animation)" % k)
+		elif float(b.get(k, 0.0)) <= 0.0:
+			errors.append("balance: '%s' %s must be > 0 (v0.5 UI animation)" % [k, str(b.get(k))])
+	# Flash peak alpha is bounded to [0,1] — capped so a relic/prestige wash can never blow out to
+	# an opaque full-screen strobe (AC-5.10.4 photosensitivity; the alpha is further motion-gated).
+	if not b.has("ui_flash_alpha"):
+		errors.append("balance: missing 'ui_flash_alpha' (v0.5 UI animation)")
+	else:
+		var fa: float = float(b.get("ui_flash_alpha", -1.0))
+		if fa < 0.0 or fa > 1.0:
+			errors.append("balance: 'ui_flash_alpha' %s must be in [0,1] (v0.5 UI animation, a11y-capped)" % str(fa))
 
 ## AC-5.10.1 (accessibility settings). The Settings UI seeds from data-driven defaults +
 ## ranges — volumes/motion are normalized [0,1] sliders; the UI text scale carries an
@@ -198,6 +242,215 @@ static func _check_settings(b: Dictionary, errors: Array) -> void:
 			if d < lo or d > hi:
 				errors.append("balance.settings: 'default_text_scale' %s must be within [%s,%s] (AC-5.10.1)" % [str(d), str(lo), str(hi)])
 
+## VFX feel table (v0.5 arcade pass). Every magnitude that drives the juice — camera shake,
+## zoom punch, hit-stop, explosion flash/ring, debris cap, value popups — is a /data tunable,
+## not a code literal (mirrors the _check_settings / _check_ui rules). All keys are REQUIRED
+## (a typo'd key that silently reads 0 would disable a cue or, worse, soft-lock the hit-stop),
+## and each is range-checked to its documented safe band. The hit-stop bounds are the load-
+## bearing ones: hitstop_scale in (0,1] and the durations capped small so a freeze can never
+## strand (the freeze uses an ignore-time-scale restore timer; see mine.gd _hit_stop).
+static func _check_vfx(b: Dictionary, errors: Array) -> void:
+	if not b.has("vfx"):
+		errors.append("balance: missing 'vfx' feel table (v0.5 arcade tunables)")
+		return
+	var v: Variant = b.get("vfx")
+	if not (v is Dictionary):
+		errors.append("balance: 'vfx' must be a JSON object")
+		return
+	var vd: Dictionary = v
+	# (key, min_inclusive, max_inclusive) — every vfx key enumerated + range-checked.
+	# A null upper bound means "unbounded above". Keys in `strict_min` use > min, not >= min.
+	var rules: Array = [
+		["shake_max_offset_px", 0.0, 200.0],
+		["shake_kick_px", 0.0, 200.0],
+		["shake_decay_per_sec", 0.0, null],
+		["shake_base", 0.0, 1.0],
+		["shake_per_cell", 0.0, 1.0],
+		["shake_noise_freq", 0.0, null],
+		["zoom_punch", 0.0, 0.3],
+		["zoom_punch_seconds", 0.0, null],
+		["hitstop_scale", 0.0, 1.0],
+		["hitstop_seconds", 0.0, 0.12],
+		["hitstop_min_cells", 1.0, null],
+		["hitstop_relic_seconds", 0.0, 0.3],
+		["flash_seconds", 0.0, null],
+		["flash_scale_per_radius", 0.0, null],
+		["ring_scale_per_radius", 0.0, null],
+		["ring_seconds", 0.0, null],
+		["max_debris_emitters", 1.0, null],
+		["debris_amount_per_cell", 1.0, null],
+		["popup_rise_px", 0.0, null],
+		["popup_seconds", 0.0, null],
+		["popup_max_active", 1.0, null],
+	]
+	var strict_min: Array = [
+		"shake_decay_per_sec", "shake_noise_freq", "zoom_punch_seconds", "hitstop_scale",
+		"hitstop_seconds", "hitstop_relic_seconds", "flash_seconds", "ring_seconds",
+		"popup_seconds",
+	]
+	for rule in rules:
+		var k: String = rule[0]
+		if not vd.has(k):
+			errors.append("balance.vfx: missing '%s'" % k)
+			continue
+		var val: float = float(vd.get(k, 0.0))
+		var lo: float = float(rule[1])
+		if strict_min.has(k):
+			if val <= lo:
+				errors.append("balance.vfx: '%s' %s must be > %s" % [k, str(val), str(lo)])
+		elif val < lo:
+			errors.append("balance.vfx: '%s' %s must be >= %s" % [k, str(val), str(lo)])
+		if rule[2] != null and val > float(rule[2]):
+			errors.append("balance.vfx: '%s' %s must be <= %s" % [k, str(val), str(rule[2])])
+
+## Launch & control-feel table (v0.5 arcade pass). Every magnitude that drives the THROW
+## tactility — the button squash/pop, the animated aim line width + dash scroll, the platform
+## recoil, and the muzzle-flash particle count — is a /data tunable, not a code literal (mirrors
+## the _check_vfx / _check_settings rules). All keys are REQUIRED + range-checked so a typo'd key
+## that silently reads 0 can't disable a cue. `throw_button_squash` is a (0,1] compress fraction
+## (1 = no squash, 0 = collapse to nothing — both excluded); the pop duration is strictly > 0;
+## `aim_scroll_speed`/`recoil_px` are >= 0 (0 = a static line / no kick, still valid); the muzzle
+## flash count is >= 1 (a one-shot burst needs at least one particle to read).
+static func _check_feel(b: Dictionary, errors: Array) -> void:
+	if not b.has("feel"):
+		errors.append("balance: missing 'feel' launch/control-feel table (v0.5 arcade tunables)")
+		return
+	var v: Variant = b.get("feel")
+	if not (v is Dictionary):
+		errors.append("balance: 'feel' must be a JSON object")
+		return
+	var fd: Dictionary = v
+	# throw_button_squash: compress factor on press, in (0,1]. 1 = no squash; 0/negative collapses.
+	if not fd.has("throw_button_squash"):
+		errors.append("balance.feel: missing 'throw_button_squash'")
+	else:
+		var sq: float = float(fd.get("throw_button_squash", 0.0))
+		if sq <= 0.0 or sq > 1.0:
+			errors.append("balance.feel: 'throw_button_squash' %s must be in (0,1]" % str(sq))
+	# Strictly-positive durations + widths (a 0 here would snap with no animation / an invisible line).
+	for k in ["throw_button_pop_seconds", "aim_line_width"]:
+		if not fd.has(k):
+			errors.append("balance.feel: missing '%s'" % k)
+		elif float(fd.get(k, 0.0)) <= 0.0:
+			errors.append("balance.feel: '%s' %s must be > 0" % [k, str(fd.get(k))])
+	# Non-negative magnitudes (0 = a still line / no recoil — valid, e.g. reduced motion authored low).
+	for k in ["aim_scroll_speed", "recoil_px"]:
+		if not fd.has(k):
+			errors.append("balance.feel: missing '%s'" % k)
+		elif float(fd.get(k, -1.0)) < 0.0:
+			errors.append("balance.feel: '%s' %s must be >= 0" % [k, str(fd.get(k))])
+	# Muzzle flash burst: a one-shot needs at least one particle to read.
+	if not fd.has("muzzle_flash_particles"):
+		errors.append("balance.feel: missing 'muzzle_flash_particles'")
+	elif int(fd.get("muzzle_flash_particles", 0)) < 1:
+		errors.append("balance.feel: 'muzzle_flash_particles' %s must be >= 1" % str(fd.get("muzzle_flash_particles")))
+
+## The data-driven SFX table (audio.json, v0.5 arcade audio pass). Every placeholder cue's
+## synthesis params (freq/dur/noise/sweep/pitch_jitter) are /data, not a code literal in audio.gd
+## (mirrors the _check_settings / _check_vfx / _check_feel rules). The table is REQUIRED to carry an
+## entry for EVERY core event Audio.EVENTS names, each range-checked so a typo'd key can't silence a
+## cue or, via an out-of-band pitch_jitter, distort it. The `combo` block bounds the rising-pitch
+## break rattle (>=1 voices, a > 0 step, a >= 0 semitone climb); `detonate.layers` must carry >= 3
+## layered voices (low body + bright transient + noise tail) each itself a valid event spec.
+## audio.gd keeps a hardcoded fallback so a missing table can't actually silence the game, but the
+## SHIPPED table must satisfy this gate (tunables are data — AC-5.5.4).
+const AUDIO_EVENTS := [
+	"detonate", "crack", "break", "ore_credited",
+	"pack_open", "relic_found", "prestige_banked",
+	"descend", "throw",
+]
+
+static func _check_audio(audio: Variant, errors: Array) -> void:
+	if audio == null:
+		errors.append("missing table: audio.json (v0.5 data-driven SFX)")
+		return
+	if not (audio is Dictionary):
+		errors.append("audio.json must be a JSON object")
+		return
+	var ad: Dictionary = audio
+	var events: Variant = ad.get("events")
+	if not (events is Dictionary):
+		errors.append("audio.json: missing 'events' object (one spec per core event)")
+	else:
+		var ed: Dictionary = events
+		for ev in AUDIO_EVENTS:
+			if not ed.has(ev):
+				errors.append("audio.events: missing '%s' (every Audio.EVENTS entry needs a spec)" % ev)
+				continue
+			_check_audio_event_spec("audio.events.%s" % ev, ed.get(ev), errors)
+	# combo: the rising-pitch break rattle bounds.
+	var combo: Variant = ad.get("combo")
+	if not (combo is Dictionary):
+		errors.append("audio.json: missing 'combo' object (break-rattle bounds)")
+	else:
+		var cd: Dictionary = combo
+		if not cd.has("max_voices"):
+			errors.append("audio.combo: missing 'max_voices'")
+		elif int(cd.get("max_voices", 0)) < 1:
+			errors.append("audio.combo: 'max_voices' %s must be >= 1" % str(cd.get("max_voices")))
+		if not cd.has("step_seconds"):
+			errors.append("audio.combo: missing 'step_seconds'")
+		elif float(cd.get("step_seconds", 0.0)) <= 0.0:
+			errors.append("audio.combo: 'step_seconds' %s must be > 0" % str(cd.get("step_seconds")))
+		if not cd.has("semitone_step"):
+			errors.append("audio.combo: missing 'semitone_step'")
+		elif float(cd.get("semitone_step", -1.0)) < 0.0:
+			errors.append("audio.combo: 'semitone_step' %s must be >= 0" % str(cd.get("semitone_step")))
+	# detonate.layers: the layered boom (>= 3 voices, each a valid event spec).
+	var det: Variant = ad.get("detonate")
+	if not (det is Dictionary):
+		errors.append("audio.json: missing 'detonate' object (layered-boom voices)")
+	else:
+		var layers: Variant = (det as Dictionary).get("layers")
+		if not (layers is Array):
+			errors.append("audio.detonate: missing 'layers' array (low body + transient + noise tail)")
+		elif (layers as Array).size() < 3:
+			errors.append("audio.detonate.layers: %d layer(s); need >= 3 for a layered boom" % (layers as Array).size())
+		else:
+			var li: int = 0
+			for layer in (layers as Array):
+				_check_audio_event_spec("audio.detonate.layers[%d]" % li, layer, errors)
+				li += 1
+
+## A single synthesised-tone spec: freq>0, dur in (0,2], noise in [0,1], sweep>=0, pitch_jitter in
+## [0,0.5]. Shared by both the per-event specs and the detonate.layers voices.
+static func _check_audio_event_spec(label: String, spec: Variant, errors: Array) -> void:
+	if not (spec is Dictionary):
+		errors.append("%s: must be a JSON object" % label)
+		return
+	var sd: Dictionary = spec
+	# freq: pitch, strictly positive (a 0 Hz tone is silence).
+	if not sd.has("freq"):
+		errors.append("%s: missing 'freq'" % label)
+	elif float(sd.get("freq", 0.0)) <= 0.0:
+		errors.append("%s: 'freq' %s must be > 0" % [label, str(sd.get("freq"))])
+	# dur: in (0,2] seconds (a placeholder cue is short; > 2s is almost certainly a typo).
+	if not sd.has("dur"):
+		errors.append("%s: missing 'dur'" % label)
+	else:
+		var dur: float = float(sd.get("dur", 0.0))
+		if dur <= 0.0 or dur > 2.0:
+			errors.append("%s: 'dur' %s must be in (0,2]" % [label, str(dur)])
+	# noise: white-noise mix in [0,1].
+	if not sd.has("noise"):
+		errors.append("%s: missing 'noise'" % label)
+	else:
+		var noise: float = float(sd.get("noise", -1.0))
+		if noise < 0.0 or noise > 1.0:
+			errors.append("%s: 'noise' %s must be in [0,1]" % [label, str(noise)])
+	# sweep: end pitch in Hz, >= 0 (0 = no glide).
+	if not sd.has("sweep"):
+		errors.append("%s: missing 'sweep'" % label)
+	elif float(sd.get("sweep", -1.0)) < 0.0:
+		errors.append("%s: 'sweep' %s must be >= 0" % [label, str(sd.get("sweep"))])
+	# pitch_jitter: per-play random pitch variance in [0,0.5] (0 = always tonal; 0.5 = a tritone of wobble).
+	if not sd.has("pitch_jitter"):
+		errors.append("%s: missing 'pitch_jitter'" % label)
+	else:
+		var pj: float = float(sd.get("pitch_jitter", -1.0))
+		if pj < 0.0 or pj > 0.5:
+			errors.append("%s: 'pitch_jitter' %s must be in [0,0.5]" % [label, str(pj)])
+
 static func _check_blocks(blocks: Dictionary, errors: Array) -> void:
 	if blocks.is_empty():
 		errors.append("block_types: registry is empty")
@@ -206,7 +459,7 @@ static func _check_blocks(blocks: Dictionary, errors: Array) -> void:
 		if not (blk is Dictionary):
 			errors.append("block_types[%s]: must be an object" % id)
 			continue
-		for k in ["display_name", "hardness", "max_hp", "diggable", "glyph", "palette_index"]:
+		for k in ["display_name", "hardness", "max_hp", "diggable", "palette_index"]:
 			if not blk.has(k):
 				errors.append("block_types[%s]: missing '%s'" % [id, k])
 		if blk.get("diggable", false) and int(blk.get("max_hp", 0)) <= 0:
@@ -253,12 +506,38 @@ static func _check_art_sources(art_sources: Dictionary, blocks: Dictionary, erro
 		if not (tiles as Dictionary).has(id):
 			errors.append("art_sources.terrain.block_tiles: missing tile coordinate for diggable block '%s'" % id)
 			continue
-		var coord: Variant = (tiles as Dictionary)[id]
-		if not (coord is Array) or (coord as Array).size() != 2:
-			errors.append("art_sources.terrain.block_tiles[%s]: must be [x, y]" % id)
+		# block_tiles entries accept EITHER a single coord [x, y] (1 variant, the original
+		# form — kept backward-compatible) OR a non-empty list of coords [[x, y], ...] (N
+		# per-cell tile variants sampled from the unused tileset columns, v0.5 arcade pass).
+		var entry: Variant = (tiles as Dictionary)[id]
+		var variants: Array = _block_tile_variants(entry)
+		if variants.is_empty():
+			errors.append("art_sources.terrain.block_tiles[%s]: must be [x, y] or a non-empty list [[x, y], ...]" % id)
 			continue
-		if int((coord as Array)[0]) < 0 or int((coord as Array)[1]) < 0:
-			errors.append("art_sources.terrain.block_tiles[%s]: coordinates must be >= 0" % id)
+		for coord in variants:
+			if int(coord[0]) < 0 or int(coord[1]) < 0:
+				errors.append("art_sources.terrain.block_tiles[%s]: coordinates must be >= 0" % id)
+
+## Normalize a block_tiles entry to a list of [x, y] int-pair Arrays. Accepts the single-coord
+## form [x, y] (→ one variant) OR a list of coords [[x, y], ...]. Returns [] for any malformed
+## shape (empty list, non-pair element, non-int coordinate), so the caller can reject it. Kept
+## here (not BlockArt) so the data gate is self-contained; BlockArt has its own runtime mirror.
+static func _block_tile_variants(entry: Variant) -> Array:
+	if not (entry is Array):
+		return []
+	var arr: Array = entry
+	if arr.is_empty():
+		return []
+	# Single-coord form: [x, y] where both elements are numbers (not Arrays).
+	if arr.size() == 2 and not (arr[0] is Array) and not (arr[1] is Array):
+		return [[int(arr[0]), int(arr[1])]]
+	# List-of-coords form: every element must itself be a 2-element [x, y] pair.
+	var out: Array = []
+	for coord in arr:
+		if not (coord is Array) or (coord as Array).size() != 2:
+			return []
+		out.append([int((coord as Array)[0]), int((coord as Array)[1])])
+	return out
 
 ## AC-5.2.1 / AC-5.1.5: max_hp must not decrease as hardness increases (diggable blocks).
 static func _check_hardness_hp_monotonic(blocks: Dictionary, errors: Array) -> void:
@@ -290,11 +569,11 @@ static func _check_hardness_hp_monotonic(blocks: Dictionary, errors: Array) -> v
 			errors.append("block_types: max_hp not monotonic with hardness — hardness %d (min hp %d) < hardness %d (max hp %d); harder rock must not have less base HP (AC-5.2.1)" % [hi_h, levels[hi_h]["min"], lo_h, levels[lo_h]["max"]])
 
 ## AC-5.10.2 / AC-5.10.3 (non-color block identity). palette.json backs the block COLOR
-## (palette_index) and each diggable block carries a distinct GLYPH shape on the overlay
-## layer. Enforce: palette present + valid hex; every palette_index in range; every diggable
-## glyph is a known shape (never "none"); distinct diggable blocks use distinct glyphs; and
-## every pair of diggable block colors differs in LUMINANCE (not just hue), so identity never
-## rides color/hue alone — a colorblind player can split blocks by shape AND by brightness.
+## (palette_index). With the debug-grid glyph overlay removed (v0.5 arcade pass), block
+## identity is carried by the textured pixel-art tile PLUS a luminance contrast guarantee.
+## Enforce: palette present + valid hex; every palette_index in range; and every pair of
+## diggable block colors differs in LUMINANCE (not just hue), so identity never rides hue
+## alone — a colorblind player can still split blocks by brightness (reframed AC-5.10.2/5.10.3).
 static func _check_palette(pal: Variant, blocks: Dictionary, errors: Array) -> void:
 	if pal == null:
 		errors.append("missing table: palette.json")
@@ -309,7 +588,6 @@ static func _check_palette(pal: Variant, blocks: Dictionary, errors: Array) -> v
 	for i in range(colors.size()):
 		if not Color.html_is_valid(str(colors[i])):
 			errors.append("palette: colors[%d] '%s' is not a valid hex color" % [i, str(colors[i])])
-	var glyph_owner: Dictionary = {}  # glyph name -> first block id that claimed it
 	var lum_rows: Array = []          # {id, lum} per diggable block (luminance-contrast check)
 	for id in blocks.keys():
 		var blk: Variant = blocks[id]
@@ -320,13 +598,6 @@ static func _check_palette(pal: Variant, blocks: Dictionary, errors: Array) -> v
 			errors.append("block_types[%s]: palette_index %d out of palette range [0,%d)" % [id, pidx, colors.size()])
 		if not bool((blk as Dictionary).get("diggable", false)):
 			continue
-		var g: String = str((blk as Dictionary).get("glyph", "none"))
-		if not ALLOWED_GLYPHS.has(g):
-			errors.append("block_types[%s]: diggable glyph '%s' must be one of %s (no color-only identity, AC-5.10.2)" % [id, g, str(ALLOWED_GLYPHS)])
-		elif glyph_owner.has(g):
-			errors.append("block_types[%s]: glyph '%s' already used by '%s' — distinct block types need distinct glyphs (AC-5.10.2)" % [id, g, glyph_owner[g]])
-		else:
-			glyph_owner[g] = id
 		if pidx >= 0 and pidx < colors.size() and Color.html_is_valid(str(colors[pidx])):
 			lum_rows.append({"id": str(id), "lum": _rel_luminance(Color.html(str(colors[pidx])))})
 	for i in range(lum_rows.size()):

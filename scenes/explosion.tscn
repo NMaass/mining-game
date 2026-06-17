@@ -1,6 +1,9 @@
-[gd_scene load_steps=5 format=3 uid="uid://dexplosion01"]
+[gd_scene load_steps=9 format=3 uid="uid://dexplosion01"]
 
-[ext_resource type="Texture2D" path="res://art/runtime/explosion_particle.png" id="1_explosiontex"]
+[ext_resource type="Script" path="res://scripts/ui/explosion_fx.gd" id="0_explosionfx"]
+[ext_resource type="Texture2D" uid="uid://dtdv1qwh57e2p" path="res://art/runtime/explosion_particle.png" id="1_explosiontex"]
+[ext_resource type="Texture2D" uid="uid://dxodxks2jkc38" path="res://art/runtime/flash_core.png" id="2_flashtex"]
+[ext_resource type="Texture2D" uid="uid://coq1hjp3r6vwq" path="res://art/runtime/shockwave_ring.png" id="3_ringtex"]
 
 [sub_resource type="Gradient" id="Gradient_explosion"]
 offsets = PackedFloat32Array(0, 0.5, 1)
@@ -22,7 +25,25 @@ scale_min = 2.0
 scale_max = 4.0
 color_ramp = SubResource("GradientTexture1D_explosion")
 
-[node name="Explosion" type="GPUParticles2D"]
+[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_additive"]
+blend_mode = 1
+
+[node name="Explosion" type="Node2D"]
+script = ExtResource("0_explosionfx")
+
+[node name="Ring" type="Sprite2D" parent="."]
+material = SubResource("CanvasItemMaterial_additive")
+modulate = Color(0.6, 0.8, 1, 1)
+scale = Vector2(0.05, 0.05)
+texture = ExtResource("3_ringtex")
+
+[node name="Flash" type="Sprite2D" parent="."]
+material = SubResource("CanvasItemMaterial_additive")
+modulate = Color(1, 0.95, 0.8, 1)
+scale = Vector2(0.1, 0.1)
+texture = ExtResource("2_flashtex")
+
+[node name="Spark" type="GPUParticles2D" parent="."]
 emitting = false
 amount = 28
 lifetime = 0.5

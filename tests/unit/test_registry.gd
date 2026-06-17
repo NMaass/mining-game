@@ -23,13 +23,13 @@ func _load_real_tables() -> Dictionary:
 # ── Block lookups (AC-5.1.5) ────────────────────────────────────────────────
 
 func test_block_returns_expected_fields() -> void:
-	# AC-5.1.5: block(id) returns hardness/max_hp/ore/glyph
+	# AC-5.1.5: block(id) returns display_name/hardness/max_hp/diggable/palette_index/ore.
 	var dirt: Dictionary = Registry.block(_tables, "dirt")
 	assert_str(dirt.get("display_name", "")).is_equal("Dirt")
 	assert_int(int(dirt.get("hardness", -1))).is_equal(1)
 	assert_int(int(dirt.get("max_hp", -1))).is_equal(20)
 	assert_bool(dirt.get("diggable", false) as bool).is_true()
-	assert_str(dirt.get("glyph", "")).is_equal("dots")
+	assert_int(int(dirt.get("palette_index", -1))).is_equal(3)
 
 func test_block_ore_value() -> void:
 	# AC-5.1.5: ore blocks carry a value
@@ -178,10 +178,18 @@ func test_balance_values() -> void:
 	assert_int(Registry.shaft_left_cell(_tables)).is_equal(195)
 	assert_int(Registry.chunk_height(_tables)).is_equal(16)
 	assert_int(Registry.block_pixel_size(_tables)).is_equal(16)
-	assert_int(Registry.starting_money(_tables)).is_equal(0)
+	assert_int(Registry.starting_money(_tables)).is_equal(50)
 	assert_int(Registry.run_seed(_tables)).is_equal(1337)
 	assert_int(Registry.crack_stages(_tables)).is_equal(3)
-	assert_float(Registry.camera_zoom(_tables)).is_equal(0.55)
+	assert_float(Registry.camera_zoom(_tables)).is_equal(2.2)
+
+func test_light_dark_tint_resolves_hex() -> void:
+	# v0.5 arcade pass: the headlamp mask fades toward a cool deep-terrain tint (not pure black).
+	# The accessor resolves the data-driven hex to a Color; the shipped value is the cool cast.
+	var tint: Color = Registry.light_dark_tint(_tables)
+	assert_object(tint).is_equal(Color.html("#0b0d1a"))
+	# A non-black tint (so deep terrain reads atmospheric, not muddy black).
+	assert_bool(tint.r > 0.0 or tint.g > 0.0 or tint.b > 0.0).is_true()
 
 func test_max_hp_consistent_with_block() -> void:
 	# max_hp derivation is consistent: Registry.block_max_hp == block().max_hp

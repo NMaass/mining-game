@@ -18,13 +18,30 @@ signal accepted
 signal declined
 
 @onready var _panel: PanelContainer = get_node_or_null("Panel")
+@onready var _backdrop: Control = get_node_or_null("Backdrop")
 @onready var _accept_button: Button = get_node_or_null("Panel/Box/AcceptButton")
 @onready var _decline_button: Button = get_node_or_null("Panel/Box/DeclineButton")
+
+## Data tables (for the scale-in duration). Set via configure(); empty → code-default fallback.
+var _tables: Dictionary = {}
+## Live tween handle so a re-show kills a prior pop-in (no compounding scale / stuck alpha).
+var _tween: Tween = null
 
 
 func _ready() -> void:
 	visible = false
 	_connect_once()
+
+
+## Provide the data tables (the scale-in duration is a /data tunable). Idempotent.
+func configure(tables: Dictionary) -> void:
+	_tables = tables
+
+
+func _in_seconds() -> float:
+	if _tables.is_empty():
+		return 0.22
+	return Registry.ui_panel_in_seconds(_tables)
 
 
 func _connect_once() -> void:
@@ -34,20 +51,60 @@ func _connect_once() -> void:
 		_decline_button.pressed.connect(_on_decline)
 
 
-## Show the prestige offer and pause the game tree. The overlay itself keeps running.
-func show_offer() -> void:
+## Show the prestige offer and pause the game tree. The overlay itself keeps running (process_mode
+## = ALWAYS), so the pop-in tween advances while the rest of the tree is paused.
+##
+## v0.5 arcade pass: the Panel POPS IN (scale 0.85→1.0 + alpha 0→1, TRANS_BACK) over
+## ui_panel_in_seconds, with a dimmed backdrop. `visible` is set TRUE SYNCHRONOUSLY first so the
+## smoke test reading offer.visible right after stays green. At motion ~0 it snaps (no tween).
+func show_offer(motion: float = 1.0) -> void:
 	visible = true
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	_animate_in(motion)
 
 
-## Hide the offer and unpause the game tree.
+## Hide the offer and unpause the game tree. SYNCHRONOUS (the smoke test reads offer.visible ==
+## false immediately after accept/decline) — no out-tween; we snap hidden and reset the transform.
 func hide_offer() -> void:
+	if _tween != null and _tween.is_valid():
+		_tween.kill()
 	visible = false
+	if _panel != null:
+		_panel.scale = Vector2.ONE
+		_panel.modulate = Color(1, 1, 1, 1)
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = false
+
+
+## Pop the Panel into view (the backdrop fades in alongside). Pure presentation; visible is true.
+func _animate_in(motion: float) -> void:
+	if _panel == null:
+		return
+	if _tween != null and _tween.is_valid():
+		_tween.kill()
+	_panel.pivot_offset = _panel.size * 0.5
+	if motion <= 0.01:
+		_panel.scale = Vector2.ONE
+		_panel.modulate = Color(1, 1, 1, 1)
+		if _backdrop != null:
+			_backdrop.modulate = Color(1, 1, 1, 1)
+		return
+	_panel.scale = Vector2(0.85, 0.85)
+	_panel.modulate = Color(1, 1, 1, 0)
+	if _backdrop != null:
+		_backdrop.modulate = Color(1, 1, 1, 0)
+	var seconds: float = _in_seconds()
+	_tween = create_tween().set_parallel(true)
+	_tween.tween_property(_panel, "scale", Vector2.ONE, seconds) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_tween.tween_property(_panel, "modulate", Color(1, 1, 1, 1), seconds) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if _backdrop != null:
+		_tween.tween_property(_backdrop, "modulate", Color(1, 1, 1, 1), seconds) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 func _on_accept() -> void:

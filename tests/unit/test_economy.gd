@@ -18,6 +18,9 @@ func _load_real_tables() -> Dictionary:
 		var json := JSON.new()
 		assert_int(json.parse(f.get_as_text())).is_equal(OK)
 		out[file_name.get_basename()] = json.data
+	# These tests verify crediting/debit MATH from a clean zero balance; pin the
+	# starting grant to 0 so they stay decoupled from the production dig stipend.
+	(out["balance"] as Dictionary)["starting_money"] = 0
 	return out
 
 # ── Ore crediting (AC-5.5.1) ───────────────────────────────────────────────

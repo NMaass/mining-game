@@ -1,7 +1,7 @@
-[gd_scene load_steps=9 format=3 uid="uid://dblockgrid01"]
+[gd_scene load_steps=6 format=3 uid="uid://dblockgrid01"]
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_block"]
-size = Vector2(80, 16)
+size = Vector2(208, 16)
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_block"]
 texture = SubResource("PlaceholderTexture2D_block")
@@ -16,28 +16,28 @@ texture_region_size = Vector2i(16, 16)
 3:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
 4:0/0 = 0
 4:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+5:0/0 = 0
+5:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+6:0/0 = 0
+6:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+7:0/0 = 0
+7:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+8:0/0 = 0
+8:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+9:0/0 = 0
+9:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+10:0/0 = 0
+10:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+11:0/0 = 0
+11:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+12:0/0 = 0
+12:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
 
 [sub_resource type="TileSet" id="TileSet_block"]
 tile_size = Vector2i(16, 16)
 physics_layer_0/collision_layer = 1
 physics_layer_0/collision_mask = 2
 sources/0 = SubResource("TileSetAtlasSource_block")
-
-[sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_glyph"]
-size = Vector2(80, 16)
-
-[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_glyph"]
-texture = SubResource("PlaceholderTexture2D_glyph")
-texture_region_size = Vector2i(16, 16)
-0:0/0 = 0
-1:0/0 = 0
-2:0/0 = 0
-3:0/0 = 0
-4:0/0 = 0
-
-[sub_resource type="TileSet" id="TileSet_glyph"]
-tile_size = Vector2i(16, 16)
-sources/0 = SubResource("TileSetAtlasSource_glyph")
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_crack"]
 size = Vector2(32, 16)
@@ -56,10 +56,6 @@ sources/0 = SubResource("TileSetAtlasSource_crack")
 
 [node name="BlockLayer" type="TileMapLayer" parent="."]
 tile_set = SubResource("TileSet_block")
-
-[node name="GlyphLayer" type="TileMapLayer" parent="."]
-z_index = 1
-tile_set = SubResource("TileSet_glyph")
 
 [node name="CrackLayer" type="TileMapLayer" parent="."]
 z_index = 2
