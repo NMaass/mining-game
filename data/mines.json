@@ -1,0 +1,22 @@
+{
+  "surface": {
+    "display_name": "Surface Mine",
+    "description": "The home shaft. Standard rock, balanced ore.",
+    "access_cost": 0,
+    "hardness_mult": 1.0,
+    "ore_value_mult": 1.0,
+    "tile_tint": "#ffffff",
+    "seed_offset": 0,
+    "relic_name": "Ancient Relic"
+  },
+  "deep": {
+    "display_name": "Deep Mine",
+    "description": "Harder rock and a darker cut — but the ore is worth far more.",
+    "access_cost": 600,
+    "hardness_mult": 2.0,
+    "ore_value_mult": 3.0,
+    "tile_tint": "#8b93ab",
+    "seed_offset": 104729,
+    "relic_name": "Obsidian Relic"
+  }
+}

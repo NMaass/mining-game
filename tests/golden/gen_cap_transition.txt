@@ -1,0 +1,16 @@
+ore_silver,rock,rock,rock,rock,rock,rock
+ore_silver,rock,rock,rock,rock,rock,rock
+ore_gold,ore_silver,rock,rock,rock,rock,rock
+ore_gold,ore_silver,rock,rock,rock,rock,rock
+ore_gold,ore_gold,rock,rock,rock,rock,rock
+ore_gem,ore_gold,ore_silver,rock,rock,rock,rock
+ore_gem,ore_gold,ore_silver,rock,rock,rock,rock
+ore_gem,ore_gold,ore_silver,rock,rock,rock,rock
+ore_gold,ore_silver,rock,rock,rock,rock,rock
+ore_gold,ore_silver,rock,rock,rock,rock,rock
+ore_silver,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock
+rock,rock,rock,rock,rock,rock,rock

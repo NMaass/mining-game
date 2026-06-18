@@ -44,13 +44,6 @@ func _make_charge(explosive_id: String, spawn: Vector2, bps: int = 64) -> Array:
 	)
 	return [charge, capture]
 
-# Build a fake platform body for impact tests (collision layer 4 + platform group).
-func _make_platform_body() -> StaticBody2D:
-	var body := StaticBody2D.new()
-	body.collision_layer = 4
-	body.add_to_group("platform")
-	return auto_free(body)
-
 # ── Spawn / launch (AC-5.3.3) ──────────────────────────────────────────────
 
 func test_setup_configures_rigid_body() -> void:
@@ -65,7 +58,7 @@ func test_setup_configures_rigid_body() -> void:
 	# Continuous CD on (no tunneling) + explicit collision masks.
 	assert_int(charge.continuous_cd).is_equal(RigidBody2D.CCD_MODE_CAST_RAY)
 	assert_int(charge.collision_layer).is_equal(2)
-	assert_int(charge.collision_mask).is_equal(1 | 4)
+	assert_int(charge.collision_mask).is_equal(1)
 	assert_float(charge.physics_material_override.bounce).is_equal_approx(0.35, 0.001)
 
 func test_launch_applies_impulse_at_angle() -> void:
@@ -161,44 +154,83 @@ func test_sticky_freezes_on_first_contact() -> void:
 	charge.on_impact()
 	assert_bool(charge.freeze).is_true()
 
-func test_sticky_on_rest_detonates_after_freeze_delay() -> void:
-	# A frozen sticky charge never "sleeps", so it detonates via a short post-
-	# freeze fuse delay rather than on_settled(). It must NOT fire instantly.
+func test_sticky_on_rest_detonates_after_its_stick_fuse() -> void:
+	# A sticky on_rest charge sticks on contact, then detonates after its authored stick-fuse
+	# (data fuse_seconds, floored). It must NOT fire instantly, and must fire once the fuse elapses.
 	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
 	var charge: Charge = made[0]
 	var capture: Dictionary = made[1]
-	charge.on_impact()  # freezes, arms ~0.15s delay
+	var fuse: float = ThrowParams.from_explosive(_load_real_tables(), "charge_sticky").fuse_seconds
+	assert_float(fuse).is_greater(0.3)  # the data gives it a real, noticeable stick fuse
+	charge.on_impact()  # freezes, arms the stick-fuse
 	assert_bool(capture["fired"]).is_false()
-	charge.step(0.2)
+	charge.step(fuse * 0.5)
+	assert_bool(capture["fired"]).override_failure_message("sticky charge detonated before its fuse").is_false()
+	charge.step(fuse)
 	assert_bool(capture["fired"]).is_true()
 
-func test_sticky_ignores_platform_during_grace() -> void:
-	# AC-5.4.2 / platform-grace fix: a sticky charge spawned beneath the platform
-	# must NOT freeze or detonate if it brushes the launcher within the grace window.
+func test_sticky_does_not_detonate_via_sleeping_after_freeze() -> void:
+	# REGRESSION (the "sticky bomb instantly explodes" bug): a FROZEN sticky on_rest charge reports
+	# sleeping=true to _physics_process. The per-frame on_rest+sleeping path must NOT detonate it —
+	# its stick-fuse owns detonation. This drives the SAME tick(delta, is_sleeping) the engine calls,
+	# with is_sleeping=true, which the old code (a bare `if on_rest and sleeping`) failed: it called
+	# on_settled() on the first frozen frame and exploded on contact. The earlier test missed this
+	# because it only called step()/on_impact() directly, never the sleeping path.
 	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
 	var charge: Charge = made[0]
 	var capture: Dictionary = made[1]
-	var platform: StaticBody2D = _make_platform_body()
-
-	# First platform contact during grace: completely ignored.
-	charge.on_impact(platform)
-	assert_bool(charge.freeze).is_false()
-	assert_bool(capture["fired"]).is_false()
-	assert_bool(charge.has_impacted).is_false()
-
-	# Still inside the 0.18s window: repeated platform contacts are still no-ops.
-	charge.step(0.1)
-	charge.on_impact(platform)
-	assert_bool(charge.freeze).is_false()
-	assert_bool(capture["fired"]).is_false()
-
-	# Grace expired: platform contact now freezes and arms the sticky fuse.
-	charge.step(0.1)
-	charge.on_impact(platform)
+	charge.on_impact()  # stick → freeze, arm the stick-fuse
 	assert_bool(charge.freeze).is_true()
-	assert_bool(capture["fired"]).is_false()
-	charge.step(0.2)
+	# Several physics frames where the frozen body sleeps, totaling well under the stick-fuse.
+	for i in range(5):
+		charge.tick(0.05, true)
+	assert_bool(capture["fired"]).override_failure_message(
+		"sticky charge detonated instantly via the sleeping/on_settled path instead of its fuse"
+	).is_false()
+	# The stick-fuse still detonates it once enough time passes.
+	charge.tick(2.0, true)
 	assert_bool(capture["fired"]).is_true()
+
+func test_on_rest_does_not_detonate_while_sleeping_at_launch() -> void:
+	# REGRESSION (the real "sticky bomb explodes instantly" bug, path a — AC-5.4.2): a freshly
+	# LAUNCHED on_rest charge reports sleeping=true for the first physics frame(s) before Rapier
+	# integrates the launch impulse (linear_velocity ~0 → the body reads "at rest" on frame 0). The
+	# engine path tick(delta, is_sleeping=true) must NOT resolve on_settled() until the charge has
+	# actually been in motion (the min-airtime / min-travel gate). It must NOT have stuck
+	# (freeze=false), so this exercises the never-impacted at-launch path the freeze guard does not
+	# cover — the gap the old test missed (it ticked a NEVER-launched charge and asserted detonation,
+	# codifying the bug). Deleting _has_been_in_motion()'s guard turns this test red.
+	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
+	var charge: Charge = made[0]
+	var capture: Dictionary = made[1]
+	charge.launch(0.0)
+	assert_bool(charge.freeze).is_false()
+	# Frame 0..N: fresh body still "sleeping", total time UNDER MIN_AIRTIME_SEC, no travel.
+	charge.tick(0.02, true)
+	charge.tick(0.02, true)
+	assert_bool(capture["fired"]).override_failure_message(
+		"sticky on_rest charge detonated in mid-air on the first sleeping frames, before any motion"
+	).is_false()
+
+func test_on_rest_resolves_via_sleeping_after_min_airtime() -> void:
+	# The no-soft-lock guarantee survives the motion gate (AC-5.4.2): once the charge has been
+	# airborne past MIN_AIRTIME_SEC (it never stuck → never froze), the sleeping path still resolves
+	# it — a charge that genuinely drifts to rest can't soft-lock. Setting MIN_AIRTIME_SEC absurdly
+	# high (or never advancing past it) turns this test red.
+	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
+	var charge: Charge = made[0]
+	var capture: Dictionary = made[1]
+	charge.launch(0.0)
+	charge.tick(0.5, true)   # well past the min-airtime gate
+	assert_bool(capture["fired"]).is_true()
+
+func test_charge_collision_mask_is_terrain_only() -> void:
+	# The platform and player are visual-only anchors; charges must pass through them.
+	# The charge's collision mask should be terrain (layer 1) only, NOT platform (layer 4).
+	var made: Array = _make_charge("charge_sticky", Vector2(100.0, 0.0))
+	var charge: Charge = made[0]
+	assert_int(charge.collision_mask).is_equal(1)
+	assert_int(charge.collision_layer).is_equal(2)
 
 # ── cell conversion floors correctly (v0.4 bug fix) ────────────────────────
 

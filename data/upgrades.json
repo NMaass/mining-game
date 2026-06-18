@@ -1,0 +1,10 @@
+{
+  "shaft_engineering": {
+    "display_name": "Shaft Engineering",
+    "description": "Narrows the required shaft clearance from 9 to 7 cells for this dig.",
+    "price": 80,
+    "effect": "shaft_width_reduction",
+    "magnitude": -2,
+    "max_level": 1
+  }
+}

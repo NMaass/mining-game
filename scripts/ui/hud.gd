@@ -32,6 +32,9 @@ signal elevator_down_pressed
 # the controls. The accessibility-meaningful values (touch target, edge margin) are data.
 const _BAR_PAD := 10.0
 const _NAV_RESERVE := 220.0  # horizontal room kept for the top-right buttons
+## Fixed vertical gap (logical px) between the up slot and the down slot. Presentation spacing
+## (like _BAR_PAD), not game balance — the slot POSITIONS are what must stay fixed.
+const _ELEVATOR_SLOT_GAP := 12.0
 
 @onready var _top: Control = get_node_or_null("Top")
 @onready var _money_box: Control = get_node_or_null("Top/MoneyBox")
@@ -60,6 +63,9 @@ var _last_insets: Dictionary = {"top": 0.0, "bottom": 0.0, "left": 0.0, "right":
 ## UI text scale (AC-5.10.1 / AC-5.8.6): multiplies the top-bar label font sizes from their
 ## authored bases. Captured once per label so repeated set_text_scale calls don't compound.
 var _text_scale: float = 1.0
+## Which screen edge the elevator controls are laid out against ("left"|"right") — a controls
+## accessibility setting (AC-5.10.1). Drives apply_layout_with's ElevatorControls placement.
+var _elevator_side: String = "right"
 var _base_font_sizes: Dictionary = {}  # Label -> int authored base font size
 ## Last money value pushed in, so a text-scale change re-renders it with the right abbreviation.
 var _money_value: int = 0
@@ -161,14 +167,39 @@ func apply_layout_with(window_px: Vector2i, safe_px: Rect2i, logical: Vector2i) 
 		# Let the container right-align its children.
 		_top_right.alignment = BoxContainer.ALIGNMENT_END
 
-	# Elevator controls (up/down arrows), flush-right and vertically centered.
+	# Elevator controls (up/down arrows), vertically centered, against the player-chosen edge
+	# (AC-5.10.1 controls side: "left" hugs the left inset, "right" the right inset).
+	#
+	# FIXED SLOTS: up always occupies the UPPER slot, down always the LOWER slot. Each button is
+	# positioned INDIVIDUALLY (not by a reflowing container), so hiding one (the hide-not-disable
+	# behavior for a direction you can't go) never moves the other — toggling `visible` is purely
+	# show/hide, never a swap. The container is a plain Control (no auto-layout); the two buttons
+	# anchor to its top / bottom with a fixed gap between the slots.
 	if _elevator_controls != null:
-		var elevator_size: Vector2 = _elevator_controls.get_combined_minimum_size()
-		var w: float = maxf(elevator_size.x, min_touch)
-		var h: float = maxf(elevator_size.y, min_touch * 2.0)
-		var right: float = float(logical.x) - insets["right"] - margin
+		var btn_w: float = maxf(_elevator_button_size(_elevator_up).x, min_touch)
+		var btn_h: float = maxf(_elevator_button_size(_elevator_up).y, min_touch)
+		var down_w: float = maxf(_elevator_button_size(_elevator_down).x, min_touch)
+		var down_h: float = maxf(_elevator_button_size(_elevator_down).y, min_touch)
+		var w: float = maxf(btn_w, down_w)
+		# Two slots stacked with a fixed gap: total height = up + gap + down.
+		var h: float = btn_h + _ELEVATOR_SLOT_GAP + down_h
 		var center_y: float = float(logical.y) / 2.0
-		_set_rect(_elevator_controls, right - w, center_y - h * 0.5, right, center_y + h * 0.5)
+		var left_edge: float
+		if _elevator_side == "left":
+			left_edge = insets["left"] + margin
+		else:
+			left_edge = float(logical.x) - insets["right"] - margin - w
+		var top: float = center_y - h * 0.5
+		_set_rect(_elevator_controls, left_edge, top, left_edge + w, top + h)
+		# Each button is placed at its FIXED slot in the container's LOCAL space (offsets relative to
+		# the container origin). The up button's rect depends only on the container geometry; the down
+		# button's rect depends only on the container geometry + the up slot height — NEITHER depends on
+		# the other button's `visible`, so hiding one cannot move the other.
+		if _elevator_up != null:
+			_set_rect(_elevator_up, 0.0, 0.0, btn_w, btn_h)
+		if _elevator_down != null:
+			var down_top: float = btn_h + _ELEVATOR_SLOT_GAP
+			_set_rect(_elevator_down, 0.0, down_top, down_w, down_top + down_h)
 
 	# Bottom control bar (tray + throw + pack), its BOTTOM edge above the bottom inset.
 	if _bottom != null:
@@ -209,6 +240,44 @@ func _min_touch() -> float:
 		return 48.0
 	var v: float = Registry.ui_min_touch_target_px(_tables)
 	return v if v > 0.0 else 48.0
+
+
+## The authored minimum size of an elevator button (its custom_minimum_size). Used to size the two
+## fixed slots. Null-safe (a bare headless instance with no button returns the touch-target square).
+func _elevator_button_size(b: Button) -> Vector2:
+	if b == null:
+		var m: float = _min_touch()
+		return Vector2(m, m)
+	return b.custom_minimum_size
+
+
+## The container-local top-left of the elevator UP button's FIXED slot (for tests). Always the
+## upper slot — independent of either button's visibility.
+func elevator_up_slot_position() -> Vector2:
+	if _elevator_up == null:
+		return Vector2.ZERO
+	return _elevator_up.position
+
+
+## The container-local top-left of the elevator DOWN button's FIXED slot (for tests). Always the
+## lower slot — independent of either button's visibility.
+func elevator_down_slot_position() -> Vector2:
+	if _elevator_down == null:
+		return Vector2.ZERO
+	return _elevator_down.position
+
+
+## Show/hide the elevator buttons INDIVIDUALLY (the hide-not-disable behavior for a direction you
+## cannot go). Toggling either `visible` never moves the other — each sits at a fixed slot. Called
+## by the controller from its UI refresh. Headless-safe (no-op on a missing button).
+func set_elevator_up_visible(v: bool) -> void:
+	if _elevator_up != null:
+		_elevator_up.visible = v
+
+
+func set_elevator_down_visible(v: bool) -> void:
+	if _elevator_down != null:
+		_elevator_down.visible = v
 
 
 ## The most recent safe-area insets (logical px): {top,bottom,left,right}. For tests.
@@ -360,6 +429,18 @@ func set_text_scale(scale: float) -> void:
 	_text_scale = maxf(0.1, scale)
 	_apply_text_scale()
 	apply_layout()
+
+
+## Set which screen edge the elevator up/down controls lay out against (AC-5.10.1 controls).
+## "left"|"right"; anything else coerces to "right". Re-runs the layout so the change is immediate.
+func set_elevator_side(side: String) -> void:
+	_elevator_side = "left" if side == "left" else "right"
+	apply_layout()
+
+
+## The current elevator side ("left"|"right") — for tests/inspection.
+func elevator_side() -> String:
+	return _elevator_side
 
 
 func _apply_text_scale() -> void:

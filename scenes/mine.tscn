@@ -7,25 +7,21 @@
 [ext_resource type="Script" path="res://scripts/ui/tray.gd" id="5_tray"]
 [ext_resource type="Script" path="res://scripts/ui/dig_end_panel.gd" id="6_digend"]
 [ext_resource type="PackedScene" uid="uid://doverlay01" path="res://scenes/overlay.tscn" id="7_overlay"]
-[ext_resource type="Script" path="res://scripts/ui/shaft_guide.gd" id="8_shaftguide"]
+[ext_resource type="Script" path="res://scripts/ui/shaft_supports.gd" id="8_shaftsupports"]
 [ext_resource type="Script" path="res://scripts/ui/prestige_offer.gd" id="9_prestigeoffer"]
 [ext_resource type="Shader" path="res://shaders/light_radius.gdshader" id="10_lightradius"]
+[ext_resource type="Script" path="res://scripts/ui/aim_line.gd" id="10_aimline"]
 [ext_resource type="FontFile" path="res://art/fonts/PixelifySans.ttf" id="11_pixelfont"]
 [ext_resource type="PackedScene" uid="uid://shopmodal01" path="res://scenes/shop_modal.tscn" id="12_shopmodal"]
+[ext_resource type="Texture2D" path="res://art/runtime/sky.png" id="12_sky"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/money.png" id="12_iconmoney"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/depth.png" id="13_icondepth"]
 [ext_resource type="Texture2D" path="res://art/runtime/icons/relic.png" id="14_iconrelic"]
 [ext_resource type="Texture2D" uid="uid://coq1hjp3r6vwq" path="res://art/runtime/shockwave_ring.png" id="15_reticle"]
+[ext_resource type="PackedScene" uid="uid://mineselect01" path="res://scenes/mine_select.tscn" id="16_mineselect"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_lightmask"]
 shader = ExtResource("10_lightradius")
-
-[sub_resource type="Gradient" id="Gradient_aim"]
-offsets = PackedFloat32Array(0, 1)
-colors = PackedColorArray(1, 1, 0.6, 0.85, 1, 0.85, 0.4, 0.25)
-
-[sub_resource type="GradientTexture1D" id="GradientTexture1D_aim"]
-gradient = SubResource("Gradient_aim")
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bottombar"]
 content_margin_left = 8.0
@@ -131,23 +127,22 @@ corner_radius_bottom_right = 12
 [node name="Mine" type="Node2D"]
 script = ExtResource("1_mine")
 
-[node name="ShaftGuide" type="Node2D" parent="."]
-z_index = 3
-script = ExtResource("8_shaftguide")
+[node name="ShaftSupports" type="Node2D" parent="."]
+z_index = 4
+script = ExtResource("8_shaftsupports")
+
+[node name="Sky" type="Sprite2D" parent="."]
+z_index = -10
+texture = ExtResource("12_sky")
+centered = false
 
 [node name="BlockGrid" parent="." instance=ExtResource("2_grid")]
 
 [node name="Platform" parent="." instance=ExtResource("3_platform")]
 
-[node name="AimPreview" type="Line2D" parent="."]
+[node name="AimPreview" type="Node2D" parent="."]
 z_index = 5
-width = 5.0
-default_color = Color(1, 1, 1, 1)
-gradient = SubResource("GradientTexture1D_aim")
-joint_mode = 2
-begin_cap_mode = 2
-end_cap_mode = 2
-antialiased = true
+script = ExtResource("10_aimline")
 
 [node name="AimReticle" type="Sprite2D" parent="."]
 visible = false
@@ -259,15 +254,13 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
-[node name="ElevatorControls" type="VBoxContainer" parent="Hud"]
+[node name="ElevatorControls" type="Control" parent="Hud"]
 offset_left = 640.0
 offset_top = 560.0
 offset_right = 704.0
 offset_bottom = 720.0
-theme_override_constants/separation = 12
 
 [node name="ElevatorUp" type="Button" parent="Hud/ElevatorControls"]
-layout_mode = 2
 custom_minimum_size = Vector2(64, 64)
 text = "▲"
 theme_override_fonts/font = ExtResource("11_pixelfont")
@@ -278,7 +271,6 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/disabled = SubResource("StyleBoxFlat_elevator_disabled")
 
 [node name="ElevatorDown" type="Button" parent="Hud/ElevatorControls"]
-layout_mode = 2
 custom_minimum_size = Vector2(64, 64)
 text = "▼"
 theme_override_fonts/font = ExtResource("11_pixelfont")
@@ -324,13 +316,12 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_primarybtn_hover")
 [node name="CooldownFill" type="ColorRect" parent="Hud/Bottom/ThrowButton"]
 visible = false
 layout_mode = 1
-anchors_preset = 15
+anchors_preset = 10
 anchor_right = 1.0
-anchor_bottom = 1.0
+offset_bottom = 72.0
 grow_horizontal = 2
-grow_vertical = 2
 mouse_filter = 2
-color = Color(0.6, 0.6, 0.65, 0.55)
+color = Color(0.08, 0.09, 0.12, 0.74)
 
 [node name="CooldownLabel" type="Label" parent="Hud/Bottom/ThrowButton"]
 layout_mode = 1
@@ -354,6 +345,15 @@ text = ""
 [node name="BuyPackButton" type="Button" parent="Hud/Bottom"]
 custom_minimum_size = Vector2(120, 72)
 text = "SHOP"
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 20
+theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
+theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
+
+[node name="MinesButton" type="Button" parent="Hud/Bottom"]
+custom_minimum_size = Vector2(120, 72)
+text = "MINES"
 theme_override_fonts/font = ExtResource("11_pixelfont")
 theme_override_font_sizes/font_size = 20
 theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
@@ -505,4 +505,7 @@ theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
 [node name="ShopModal" parent="." instance=ExtResource("12_shopmodal")]
+visible = false
+
+[node name="MineSelect" parent="." instance=ExtResource("16_mineselect")]
 visible = false

@@ -180,6 +180,18 @@ func get_hp(cell_x: int, cell_y: int) -> int:
 		return 0
 	return _chunks[cy]["hp"][_local_index(cell_x, cell_y)]
 
+## Build a {Vector2i: hp} window over a rectangular region of cells [left, left+width) ×
+## [top_row, bottom_row]. Used by the support-descent scan (PlatformLogic.next_support_row) to
+## look at the corridor cells below the platform without the UI controller hand-rolling the loop.
+## Pure (only reads get_hp), so it's headless-testable on a BlockGrid directly. Unloaded cells
+## read as 0 HP (air), matching get_hp.
+func hp_window(left: int, width: int, top_row: int, bottom_row: int) -> Dictionary:
+	var out: Dictionary = {}
+	for ry in range(top_row, bottom_row + 1):
+		for x in range(left, left + width):
+			out[Vector2i(x, ry)] = get_hp(x, ry)
+	return out
+
 ## Get the block id of a cell. Returns "air" for unloaded cells.
 func get_block_id(cell_x: int, cell_y: int) -> String:
 	if not in_bounds(cell_x, cell_y):

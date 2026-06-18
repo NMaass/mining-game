@@ -36,12 +36,15 @@ var _target_row: int = 0
 var _cell_size: int
 var _mine_width: int
 var _shaft_width: int
+var _platform_width: int
 var _shaft_left: int
 var _threshold: int
 var _max_steps: int
 var _tween_seconds: float
 var _lookahead_cells: int
 var _camera_zoom: float
+var _camera_vertical_offset_px: float = 0.0
+var _support_row: int = 0
 
 ## Child nodes (authored in platform.tscn, or built on demand for headless tests).
 @onready var _body: Node2D = get_node_or_null("Body")
@@ -90,6 +93,7 @@ func configure(tables: Dictionary, start_row: int = 0) -> void:
 	_cell_size = Registry.block_pixel_size(tables)
 	_mine_width = Registry.mine_width_cells(tables)
 	_shaft_width = Registry.shaft_width(tables)
+	_platform_width = Registry.platform_width_cells(tables)
 	_shaft_left = Registry.shaft_left_cell(tables)
 	_threshold = Registry.platform_clear_threshold(tables)
 	_max_steps = Registry.descent_max_steps(tables)
@@ -97,6 +101,7 @@ func configure(tables: Dictionary, start_row: int = 0) -> void:
 	_lookahead_cells = Registry.camera_lookahead_cells(tables)
 	_camera_zoom = Registry.camera_zoom(tables)
 	_target_row = start_row
+	_recompute_camera_vertical_offset()
 	# Smooth (non-jitter) shake noise — frequency is data-driven so the wobble character
 	# is a tunable. FastNoiseLite is already a known-good dep (block_gen.gd uses it).
 	if _noise == null:
@@ -115,6 +120,16 @@ func configure(tables: Dictionary, start_row: int = 0) -> void:
 		_camera.zoom = Vector2(_camera_zoom, _camera_zoom)
 		_camera.position = camera_target_position()
 		_configure_camera_limits()
+		# Snap the smoothing to the initial placement: otherwise the camera lerps from its scene
+		# origin (0,0) toward the platform over ~1s, leaving the player/platform off-screen (off to
+		# the right) for the first second — which read as "the player is invisible / buried".
+		_camera.make_current()
+		_camera.reset_smoothing()
+		force_update_transform()
+		# Recompute vertical offset when the viewport resizes so the platform fraction stays correct.
+		var vp := get_viewport()
+		if vp != null and not vp.size_changed.is_connected(_recompute_camera_vertical_offset):
+			vp.size_changed.connect(_recompute_camera_vertical_offset)
 
 
 ## The absolute cell row the platform currently targets.
@@ -123,19 +138,55 @@ var target_row: int:
 		return _target_row
 
 
+## True WHILE the descent tween is animating the platform body toward a new target row (an
+## elevator move or auto-descent in flight). Used by the Mine to hide the aim arc while the
+## platform is moving and redraw it when the platform settles (the descent tween owns the body).
+var is_descending: bool:
+	get:
+		return _descent_tween != null and _descent_tween.is_valid()
+
+
+## The deepest row the shaft supports currently reach; the platform may not descend
+## below this row until the next layer is cleared and supports advance.
+var support_row: int:
+	get:
+		return _support_row
+	set(value):
+		_support_row = value
+
+
 ## World-space position the platform body is tweening toward (its target).
 ## Pure function of the target row + cell size — assertable headless.
 func platform_target_position() -> Vector2:
 	return Vector2(_shaft_x_center(), float(_target_row * _cell_size))
 
 
+## Recompute the camera vertical offset so the platform target sits at the configured
+## fraction of the viewport height (e.g. 0.65 = two-thirds down the screen). The offset
+## is the world-Y distance from the platform to the camera center.
+func _recompute_camera_vertical_offset() -> void:
+	var viewport_height_px: float = 0.0
+	var vp: Viewport = get_viewport() if is_inside_tree() else null
+	if vp != null:
+		viewport_height_px = float(vp.get_visible_rect().size.y)
+	if viewport_height_px <= 0.0:
+		# Headless / not-yet-sized: fall back to the project viewport height so the
+		# camera fraction is still defined and tests get a stable non-zero offset.
+		viewport_height_px = float(ProjectSettings.get_setting("display/window/size/viewport_height", 1280))
+	var world_view_height: float = viewport_height_px / _camera_zoom
+	var frac: float = Registry.camera_platform_screen_fraction(_tables)
+	# frac = 0.5 → offset 0 (platform centered). frac > 0.5 → camera above platform.
+	_camera_vertical_offset_px = (0.5 - frac) * world_view_height
+
+
 ## World-space anchor the camera follows. By contract (AC-5.7.3) this is DERIVED
 ## from the platform target — same x, offset DOWN by the data-driven lookahead — so
 ## the camera always tracks the platform target and never the raw body/explosion.
 ## A small horizontal look-ahead follows the aim angle for route planning.
+## The vertical offset pushes the platform to the configured screen fraction.
 func camera_target_position() -> Vector2:
 	var pt: Vector2 = platform_target_position()
-	return Vector2(pt.x + float(_look_ahead_cells * _cell_size), pt.y + float(_lookahead_cells * _cell_size))
+	return Vector2(pt.x + float(_look_ahead_cells * _cell_size), pt.y + _camera_vertical_offset_px)
 
 
 ## Clamp the camera to the bounded mine rectangle so empty space outside the volume
@@ -144,21 +195,28 @@ func _configure_camera_limits() -> void:
 	if _camera == null:
 		return
 	var mine_w_px: float = float(_mine_width * _cell_size)
-	var mine_h_px: float = float(Registry.mine_height_cells(_tables) * _cell_size)
+	# Infinite shaft: the camera bottom is effectively unbounded. mine_bottom_row is 1<<30 for an
+	# infinite mine; (1<<30+1)*cell_size overflows Camera2D's limit math (~1.7e10) and mis-frames the
+	# view (the surface gets shoved to the bottom of the screen). Cap to a large-but-sane pixel bound
+	# (~625k cells deep) so the limit is effectively unbounded for play but never overflows.
+	var mine_h_px: float = minf(float(Registry.mine_bottom_row(_tables) + 1) * float(_cell_size), 10000000.0)
+	# Allow the camera to pan ABOVE row 0 by the sky band so the surface reads as a sky/horizon
+	# (digging-game look) instead of the player starting buried at the very top edge.
+	var sky_px: float = float(Registry.balance(_tables, "sky_band_cells", 40)) * float(_cell_size)
 	_camera.limit_left = 0
-	_camera.limit_top = 0
+	_camera.limit_top = int(-sky_px)
 	_camera.limit_right = int(mine_w_px)
 	_camera.limit_bottom = int(mine_h_px)
 	_camera.limit_smoothed = true
 
 
-## Nudge the camera horizontally toward the aim direction. `angle` is the launch
-## angle in radians (0 = down, negative = left, positive = right).
-func set_look_ahead(angle: float) -> void:
-	var max_cells: int = 6
-	# sin(angle) is roughly horizontal component for the clamped launch arc.
-	_look_ahead_cells = int(round(clampf(sin(angle), -1.0, 1.0) * float(max_cells)))
-	_reanchor_camera()
+## No-op: the camera must NOT shift horizontally when aiming (UNIT TUNE). Aim-driven
+## horizontal lookahead was removed because the pan was disorienting while lining up a
+## throw. `_look_ahead_cells` stays 0 so the camera keeps its fixed horizontal framing;
+## only the vertical surface framing tracks the platform. Kept as a method so callers
+## (mine.gd) need no change. `angle` is ignored.
+func set_look_ahead(_angle: float) -> void:
+	pass
 
 
 ## Add trauma to the decaying camera-shake model and aim its directional kick AWAY
@@ -291,20 +349,25 @@ func should_descend(hp_grid: Dictionary) -> bool:
 
 
 ## Attempt a descent against the given HP grid. Lowers the target row by the number
-## of consecutive cleared rows (capped at `descent_max_steps`), then TWEENS the body
-## toward the new target and re-anchors the camera. Returns the number of rows
-## descended (0 = no trigger). Emits `descended(new_row)` only when rows > 0.
+## of consecutive cleared rows (capped at `descent_max_steps` AND the current support
+## row), then TWEENS the body toward the new target and re-anchors the camera.
+## Returns the number of rows descended (0 = no trigger). Emits `descended(new_row)`
+## only when rows > 0.
 func try_descend(hp_grid: Dictionary) -> int:
 	var steps: int = PlatformLogic.descent_steps(
 		hp_grid, _target_row, _shaft_width, _threshold, _max_steps, _shaft_left
 	)
 	if steps <= 0:
 		return 0
-	_target_row += steps
+	# Never descend below the supported row.
+	var new_row: int = mini(_target_row + steps, _support_row)
+	if new_row <= _target_row:
+		return 0
+	_target_row = new_row
 	_tween_to_target()
 	_reanchor_camera()
 	descended.emit(_target_row)
-	return steps
+	return new_row - (_target_row - steps)
 
 
 ## True iff the platform can be manually moved up one row (not already at the top).
@@ -312,10 +375,11 @@ func can_move_up() -> bool:
 	return _target_row > 0
 
 
-## True iff the platform can be manually moved down one row (not already at the bottom).
+## True iff the platform can be manually moved down one row. Capped by the deepest
+## supported row and the bottom of the mine.
 func can_move_down() -> bool:
-	var bottom: int = Registry.mine_height_cells(_tables) - 1
-	return _target_row < bottom
+	var bottom: int = Registry.mine_bottom_row(_tables)
+	return _target_row < mini(_support_row, bottom)
 
 
 ## Manually move the platform up by one row. Clamps to 0, tweens + re-anchors the
@@ -331,14 +395,30 @@ func move_up() -> bool:
 	return true
 
 
-## Manually move the platform down by one row. Clamps to the bottom of the mine,
-## tweens + re-anchors the camera via the same path as auto-descent, and emits
-## `descended(_target_row)`. Returns true if the row actually changed.
+## Manually move the platform down by one row. Capped by the deepest supported row
+## and the bottom of the mine. Tweens + re-anchors the camera via the same path as
+## auto-descent, and emits `descended(_target_row)`. Returns true if the row changed.
 func move_down() -> bool:
-	var bottom: int = Registry.mine_height_cells(_tables) - 1
-	if _target_row >= bottom:
+	var bottom: int = Registry.mine_bottom_row(_tables)
+	var limit: int = mini(_support_row, bottom)
+	if _target_row >= limit:
 		return false
-	_target_row = mini(_target_row + 1, bottom)
+	_target_row = mini(_target_row + 1, limit)
+	_tween_to_target()
+	_reanchor_camera()
+	descended.emit(_target_row)
+	return true
+
+
+## Tween the platform target directly to `row`, clamped to the supported depth and
+## the bottom of the mine. Used when supports finish extending and the platform is
+## allowed to drop to the new depth. Returns true if the row changed.
+func descend_to(row: int) -> bool:
+	var bottom: int = Registry.mine_bottom_row(_tables)
+	var target: int = clampi(row, 0, mini(_support_row, bottom))
+	if target == _target_row:
+		return false
+	_target_row = target
 	_tween_to_target()
 	_reanchor_camera()
 	descended.emit(_target_row)
@@ -366,16 +446,9 @@ func _reanchor_camera() -> void:
 	_camera.position = camera_target_position()
 
 func _configure_body_geometry() -> void:
-	var width_px: float = float(_shaft_width * _cell_size)
-	var height_px: float = maxf(6.0, float(_cell_size) * 0.5)
-	var shape_node := get_node_or_null("Body/CollisionShape2D") as CollisionShape2D
-	if shape_node != null:
-		shape_node.position = Vector2(0.0, -height_px * 0.5)
-		var rect := shape_node.shape as RectangleShape2D
-		if rect == null:
-			rect = RectangleShape2D.new()
-			shape_node.shape = rect
-		rect.size = Vector2(width_px, height_px)
+	# Platform deck: 3 tiles wide, 1/3 tile thick (data-driven width, fixed thin proportion).
+	var width_px: float = float(_platform_width * _cell_size)
+	var height_px: float = maxf(2.0, float(_cell_size) / 3.0)
 	var visual := get_node_or_null("Body/Visual") as Node2D
 	if visual is Polygon2D:
 		(visual as Polygon2D).polygon = PackedVector2Array([
@@ -384,6 +457,7 @@ func _configure_body_geometry() -> void:
 			Vector2(width_px * 0.5, 0.0),
 			Vector2(-width_px * 0.5, 0.0),
 		])
+		visual.position = Vector2(0.0, 0.0)
 	elif visual is Sprite2D:
 		# Texture is authored at 144 px wide; scale to fit the dynamic platform width.
 		var sprite := visual as Sprite2D
@@ -396,12 +470,18 @@ func _configure_body_geometry() -> void:
 		edge.polygon = PackedVector2Array([
 			Vector2(-width_px * 0.5, -height_px),
 			Vector2(width_px * 0.5, -height_px),
-			Vector2(width_px * 0.5, -height_px + 2.0),
-			Vector2(-width_px * 0.5, -height_px + 2.0),
+			Vector2(width_px * 0.5, -height_px + maxf(1.0, height_px * 0.25)),
+			Vector2(-width_px * 0.5, -height_px + maxf(1.0, height_px * 0.25)),
 		])
+		edge.position = Vector2(0.0, 0.0)
+	var player := get_node_or_null("Body/Player") as Sprite2D
+	if player != null and player.texture != null:
+		var tex_size: Vector2 = player.texture.get_size()
+		player.position = Vector2(0.0, -height_px - tex_size.y * 0.5)
 	var marker := get_node_or_null("Body/Muzzle") as Marker2D
 	if marker != null:
-		# AC-5.3.9: launch point is below the platform deck, not above it.
+		# AC-5.3.9: launch point is one cell below the platform deck so the default
+		# downward throw enters the cleared shaft, not the deck or row 0.
 		marker.position = Vector2(0.0, float(_cell_size))
 
 var shaft_left_cell: int:

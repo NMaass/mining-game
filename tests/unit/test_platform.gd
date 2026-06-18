@@ -132,6 +132,7 @@ func test_platform_uses_data_threshold_no_magic_literal() -> void:
 func test_platform_descends_one_step_per_trigger() -> void:
 	# AC-5.7.2: one descent step per trigger when only the row directly below clears.
 	var p := _make_platform()
+	p.support_row = 100  # supports already deep so the platform may descend freely
 	var width: int = Registry.shaft_width(_tables)
 	var start_x: int = Registry.shaft_left_cell(_tables)
 	# Row 1 fully cleared, row 2 solid → exactly one step; target_row goes 0 → 1.
@@ -143,6 +144,7 @@ func test_platform_descends_one_step_per_trigger() -> void:
 func test_platform_no_descent_below_threshold() -> void:
 	# AC-5.7.2: below threshold → no row change, no descent.
 	var p := _make_platform()
+	p.support_row = 100
 	var width: int = Registry.shaft_width(_tables)
 	var start_x: int = Registry.shaft_left_cell(_tables)
 	var grid: Dictionary = _make_solid_row(1, width, 100, start_x)  # row below solid
@@ -155,6 +157,7 @@ func test_descent_emits_descended_signal_with_new_row() -> void:
 	var width: int = Registry.shaft_width(_tables)
 	var start_x: int = Registry.shaft_left_cell(_tables)
 	var monitor := monitor_signals(p)
+	p.support_row = 100
 	p.try_descend(_make_solid_row(2, width, 100, start_x))  # one step → row 1
 	await assert_signal(monitor).is_emitted("descended", [1])
 
@@ -163,6 +166,7 @@ func test_descent_tweens_target_not_instant_snap() -> void:
 	# target position updates immediately, but the BODY does not jump there in the
 	# same frame (it is still near its old position until the tween advances).
 	var p := _make_platform()
+	p.support_row = 100
 	var width: int = Registry.shaft_width(_tables)
 	var start_x: int = Registry.shaft_left_cell(_tables)
 	var body := p.get_node("Body") as Node2D
@@ -174,28 +178,28 @@ func test_descent_tweens_target_not_instant_snap() -> void:
 	assert_float(body.position.y).is_less(target_y)
 
 func test_camera_target_equals_platform_target_derived() -> void:
-	# AC-5.7.3: the camera anchor follows the PLATFORM TARGET (same x, offset down by
-	# the data-driven lookahead) — it tracks the platform target, not a raw position.
+	# AC-5.7.3: the camera anchor follows the PLATFORM TARGET (same x, offset by the
+	# data-driven screen fraction so the platform sits at the intended viewport height).
 	var p := _make_platform()
 	var pt: Vector2 = p.platform_target_position()
 	var ct: Vector2 = p.camera_target_position()
-	var cell: int = Registry.block_pixel_size(_tables)
-	var lookahead: int = Registry.camera_lookahead_cells(_tables)
 	assert_float(ct.x).is_equal(pt.x)
-	assert_float(ct.y).is_equal(pt.y + float(lookahead * cell))
+	# The vertical offset is computed from viewport height, zoom, and the configured fraction.
+	# We can only assert it is a finite, deterministic value (the test viewport is fixed headless).
+	assert_float(ct.y).is_not_equal(pt.y)
+	assert_float(ct.y - pt.y).is_equal_approx(p._camera_vertical_offset_px, 0.001)
 
 func test_camera_target_tracks_platform_target_through_descent() -> void:
 	# AC-5.7.3: after a descent, the camera target moves WITH the platform target
-	# (the invariant ct == pt + lookahead holds at the new row too).
+	# (the vertical offset invariant holds at the new row too).
 	var p := _make_platform()
 	var width: int = Registry.shaft_width(_tables)
 	var start_x: int = Registry.shaft_left_cell(_tables)
+	p.support_row = 100
 	p.try_descend(_make_solid_row(2, width, 100, start_x))  # descend one row
 	var pt: Vector2 = p.platform_target_position()
 	var ct: Vector2 = p.camera_target_position()
-	var cell: int = Registry.block_pixel_size(_tables)
-	var lookahead: int = Registry.camera_lookahead_cells(_tables)
-	assert_float(ct.y).is_equal(pt.y + float(lookahead * cell))
+	assert_float(ct.y - pt.y).is_equal_approx(p._camera_vertical_offset_px, 0.001)
 
 func test_camera_smoothing_enabled_not_hard_set() -> void:
 	# AC-5.7.3: the camera uses position smoothing (so re-anchoring to the platform
@@ -206,18 +210,16 @@ func test_camera_smoothing_enabled_not_hard_set() -> void:
 
 # ── AC-5.7.1: physical platform + muzzle launch point (was untested) ───────────
 
-func test_platform_is_physical_object_and_camera_anchor() -> void:
-	# AC-5.7.1: the platform SHALL be a physical object and the camera's anchor. Assert the
-	# authored Body is a StaticBody2D with a real collision shape (charges bounce off it) and
-	# the Camera2D is a child anchor. (Previously AC-5.7.1 was cited in the header but no test
-	# asserted the physical-anchor clause — flagged MISSING in the 2026-06-14 audit.)
+func test_platform_is_visual_anchor_with_camera() -> void:
+	# AC-5.7.1: the platform is the camera anchor and launch origin; it is intentionally
+	# NOT a physics collider so charges pass through cleanly. Assert the authored Body is
+	# a plain Node2D, there is no collision shape, and the Camera2D is a child anchor.
 	var p := _make_platform()
 	var body := p.get_node_or_null("Body")
 	assert_object(body).is_not_null()
-	assert_bool(body is StaticBody2D).is_true()
+	assert_bool(body is Node2D).is_true()
 	var shape := p.get_node_or_null("Body/CollisionShape2D") as CollisionShape2D
-	assert_object(shape).is_not_null()
-	assert_object(shape.shape).is_not_null()
+	assert_object(shape).is_null()
 	assert_object(p.get_node_or_null("Camera")).is_not_null()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -284,21 +286,19 @@ func test_zoom_punch_kicks_zoom_then_can_settle_back_to_base() -> void:
 	q.zoom_punch(0.0)
 	assert_vector(qcam.zoom).is_equal(z_before)
 
-func test_recoil_kicks_only_the_visual_not_body_collider_muzzle_or_camera() -> void:
+func test_recoil_kicks_only_the_visual_not_body_muzzle_or_camera() -> void:
 	# Launch recoil (v0.5 arcade pass) is a TACTILE deck kick that must stay cosmetic: it writes
-	# ONLY the Body/Visual child's local position. The Body (descent target), the collider, the
-	# muzzle marker, and the camera/target are physics/contract surfaces and MUST be untouched
-	# (AC-5.7.x: recoil can never fight the descent tween or drift the launch point). Assert the
-	# Visual moves once the kick tween advances, while every contract surface is byte-identical.
+	# ONLY the Body/Visual child's local position. The Body (descent target), the muzzle marker,
+	# and the camera/target are contract surfaces and MUST be untouched (AC-5.7.x: recoil can
+	# never fight the descent tween or drift the launch point). Assert the Visual moves once the
+	# kick tween advances, while every contract surface is byte-identical.
 	var p := _make_platform()
-	var body := p.get_node("Body") as StaticBody2D
+	var body := p.get_node("Body") as Node2D
 	var visual := p.get_node("Body/Visual") as Node2D
-	var shape := p.get_node("Body/CollisionShape2D") as CollisionShape2D
 	var muzzle := p.get_node("Body/Muzzle") as Marker2D
 	var cam := p.get_node("Camera") as Camera2D
 	var visual_rest: Vector2 = visual.position
 	var body_before: Vector2 = body.position
-	var shape_before: Vector2 = shape.position
 	var muzzle_before: Vector2 = muzzle.position
 	var cam_before: Vector2 = cam.position
 	var muzzle_world_before: Vector2 = p.muzzle_position()
@@ -307,10 +307,9 @@ func test_recoil_kicks_only_the_visual_not_body_collider_muzzle_or_camera() -> v
 	assert_vector(visual.position).override_failure_message(
 		"recoil did not move the Body/Visual deck off its rest position"
 	).is_not_equal(visual_rest)
-	# ...but NOTHING physics/contract moved: Body, collider, muzzle marker, camera, and the
-	# world-space muzzle launch point are all exactly as before.
+	# ...but NOTHING contract-related moved: Body, muzzle marker, camera, and the world-space
+	# muzzle launch point are all exactly as before.
 	assert_vector(body.position).is_equal(body_before)
-	assert_vector(shape.position).is_equal(shape_before)
 	assert_vector(muzzle.position).is_equal(muzzle_before)
 	assert_vector(cam.position).is_equal(cam_before)
 	assert_vector(p.muzzle_position()).is_equal(muzzle_world_before)
@@ -349,9 +348,11 @@ func test_can_move_up_false_at_top() -> void:
 	var p := _make_platform(0)
 	assert_bool(p.can_move_up()).is_false()
 
-func test_can_move_down_false_at_bottom() -> void:
-	var bottom: int = Registry.mine_height_cells(_tables) - 1
-	var p := _make_platform(bottom)
+func test_can_move_down_false_at_support_limit() -> void:
+	# UNIT MAPGEN: the infinite shaft has no mine floor — the deepest the platform can move is
+	# its current support row. At the support limit, move-down is disabled.
+	var p := _make_platform(50)
+	p.support_row = 50
 	assert_bool(p.can_move_down()).is_false()
 
 func test_move_up_clamps_at_top() -> void:
@@ -359,23 +360,26 @@ func test_move_up_clamps_at_top() -> void:
 	assert_bool(p.move_up()).is_false()
 	assert_int(p.target_row).is_equal(0)
 
-func test_move_down_clamps_at_bottom() -> void:
-	var bottom: int = Registry.mine_height_cells(_tables) - 1
-	var p := _make_platform(bottom)
+func test_move_down_clamps_at_support_limit() -> void:
+	# UNIT MAPGEN: with no mine floor, the platform clamps at the deepest SUPPORTED row.
+	var p := _make_platform(80)
+	p.support_row = 80
 	assert_bool(p.move_down()).is_false()
-	assert_int(p.target_row).is_equal(bottom)
+	assert_int(p.target_row).is_equal(80)
 
-func test_move_down_stops_at_mine_height_minus_one() -> void:
-	var mine_h: int = Registry.mine_height_cells(_tables)
-	assert_int(mine_h).is_greater(1)
-	var p := _make_platform(mine_h - 2)
+func test_move_down_stops_at_support_row() -> void:
+	# UNIT MAPGEN: the platform descends one row toward the support row, then stops there — the
+	# support row, not a mine floor, is the bottom in the infinite shaft.
+	var p := _make_platform(78)
+	p.support_row = 79
 	assert_bool(p.move_down()).is_true()
-	assert_int(p.target_row).is_equal(mine_h - 1)
+	assert_int(p.target_row).is_equal(79)
 	assert_bool(p.move_down()).is_false()
-	assert_int(p.target_row).is_equal(mine_h - 1)
+	assert_int(p.target_row).is_equal(79)
 
 func test_move_up_then_down_returns_to_start() -> void:
 	var p := _make_platform(1)
+	p.support_row = 1
 	assert_bool(p.move_up()).is_true()
 	assert_int(p.target_row).is_equal(0)
 	assert_bool(p.move_down()).is_true()
@@ -383,6 +387,7 @@ func test_move_up_then_down_returns_to_start() -> void:
 
 func test_manual_move_emits_descended_signal() -> void:
 	var p := _make_platform(0)
+	p.support_row = 1
 	var monitor := monitor_signals(p)
 	p.move_down()
 	await assert_signal(monitor).is_emitted("descended", [1])
@@ -390,6 +395,7 @@ func test_manual_move_emits_descended_signal() -> void:
 func test_manual_move_tweens_target_not_snap() -> void:
 	# AC-5.7.2: manual elevator movement reuses the descent tween path.
 	var p := _make_platform(0)
+	p.support_row = 1
 	var body := p.get_node("Body") as Node2D
 	var start_y: float = body.position.y
 	p.move_down()
@@ -398,12 +404,11 @@ func test_manual_move_tweens_target_not_snap() -> void:
 	assert_float(body.position.y).is_less(target_y)
 
 func test_manual_move_reanchors_camera() -> void:
-	# AC-5.7.3: the camera target follows the new platform target after a manual move.
+	# AC-5.7.3: the camera target follows the new platform target after a manual move,
+	# preserving the same vertical screen-fraction offset.
 	var p := _make_platform(0)
 	p.move_down()
 	var pt: Vector2 = p.platform_target_position()
 	var ct: Vector2 = p.camera_target_position()
-	var cell: int = Registry.block_pixel_size(_tables)
-	var lookahead: int = Registry.camera_lookahead_cells(_tables)
 	assert_float(ct.x).is_equal(pt.x)
-	assert_float(ct.y).is_equal(pt.y + float(lookahead * cell))
+	assert_float(ct.y - pt.y).is_equal_approx(p._camera_vertical_offset_px, 0.001)

@@ -9,6 +9,8 @@ extends CanvasLayer
 
 ## Emitted when a pack's BUY button is pressed.
 signal buy_pressed(pack_id: String)
+## Emitted when a per-dig money UPGRADE's BUY button is pressed (Shaft Engineering, etc.).
+signal buy_upgrade_pressed(upgrade_id: String)
 ## Emitted after the modal closes (whether by buy or CLOSE).
 signal closed
 
@@ -33,7 +35,9 @@ const _CRATE_COLORS: Dictionary = {
 
 var _tables: Dictionary = {}
 var _get_money: Callable
+var _get_upgrade_level: Callable
 var _buy_buttons: Dictionary = {}
+var _upgrade_buttons: Dictionary = {}  # upgrade_id -> Button
 var _tween: Tween = null
 
 
@@ -46,10 +50,17 @@ func _ready() -> void:
 ## Bind the data tables and a callback that returns the player's current money. The
 ## callback lets the modal disable BUY buttons for unaffordable packs without owning
 ## the Economy object.
-func configure(tables: Dictionary, get_money_callback: Callable) -> void:
+func configure(tables: Dictionary, get_money_callback: Callable, get_upgrade_level_callback: Callable = Callable()) -> void:
 	_tables = tables
 	_get_money = get_money_callback
+	_get_upgrade_level = get_upgrade_level_callback
 	_build_entries()
+
+
+## Re-run the affordability/owned pass without rebuilding (e.g. after an in-modal purchase
+## so the bought upgrade flips to OWNED and pack buttons re-gate on the new money balance).
+func refresh() -> void:
+	_refresh_affordability(_current_money())
 
 
 ## Open the shop, pause the game tree, and refresh each BUY button from current money.
@@ -93,6 +104,7 @@ func _build_entries() -> void:
 	for child in _entries_container.get_children():
 		child.queue_free()
 	_buy_buttons.clear()
+	_upgrade_buttons.clear()
 
 	var rarity_colors: Dictionary = _rarity_color_table()
 	for pack_id: String in Registry.pack_ids(_tables):
@@ -168,6 +180,72 @@ func _build_entries() -> void:
 
 		_entries_container.add_child(entry)
 
+	# Per-dig MONEY upgrades (Shaft Engineering, etc.) — bought with in-dig money, reset each
+	# dig. Listed after the packs in the same flow container.
+	for up_id: String in Registry.upgrade_ids(_tables):
+		var up: Dictionary = Registry.upgrade(_tables, up_id)
+		if up.is_empty():
+			continue
+		_entries_container.add_child(_build_upgrade_entry(up_id, up))
+
+
+## Build one upgrade card: icon, name, price, description, and a BUY button that flips to
+## OWNED once bought to max level (tracked in `_upgrade_buttons` for the affordability pass).
+func _build_upgrade_entry(up_id: String, up: Dictionary) -> VBoxContainer:
+	var entry := VBoxContainer.new()
+	entry.name = "Upgrade_%s" % up_id
+	entry.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	entry.alignment = BoxContainer.ALIGNMENT_CENTER
+	entry.add_theme_constant_override("separation", 6)
+
+	var icon := ColorRect.new()
+	icon.name = "Icon"
+	icon.custom_minimum_size = Vector2(64, 64)
+	icon.color = Color(0.42, 0.62, 0.45)  # green-tinted: a permanent-feeling tool upgrade
+	entry.add_child(icon)
+
+	var title_label := Label.new()
+	title_label.name = "Title"
+	title_label.text = str(up.get("display_name", up_id))
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.add_theme_font_override("font", PIXEL_FONT)
+	title_label.add_theme_font_size_override("font_size", 22)
+	entry.add_child(title_label)
+
+	var price_label := Label.new()
+	price_label.name = "Price"
+	price_label.text = "$%d" % int(up.get("price", 0))
+	price_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	price_label.add_theme_font_override("font", PIXEL_FONT)
+	price_label.add_theme_font_size_override("font_size", 22)
+	entry.add_child(price_label)
+
+	var desc_label := Label.new()
+	desc_label.name = "Desc"
+	desc_label.text = str(up.get("description", ""))
+	desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc_label.custom_minimum_size = Vector2(150, 0)
+	desc_label.add_theme_font_override("font", PIXEL_FONT)
+	desc_label.add_theme_font_size_override("font_size", 16)
+	entry.add_child(desc_label)
+
+	var buy_btn := Button.new()
+	buy_btn.name = "Buy_%s" % up_id
+	buy_btn.text = "BUY"
+	buy_btn.custom_minimum_size = Vector2(0, 48)
+	buy_btn.add_theme_font_override("font", PIXEL_FONT)
+	buy_btn.add_theme_font_size_override("font_size", 22)
+	if primary_button_normal != null:
+		buy_btn.add_theme_stylebox_override("normal", primary_button_normal)
+	if primary_button_hover != null:
+		buy_btn.add_theme_stylebox_override("hover", primary_button_hover)
+		buy_btn.add_theme_stylebox_override("pressed", primary_button_hover)
+	buy_btn.pressed.connect(_on_buy_upgrade.bind(up_id))
+	entry.add_child(buy_btn)
+	_upgrade_buttons[up_id] = buy_btn
+	return entry
+
 
 func _build_odds_rows(weights: Dictionary) -> Array:
 	var rows: Array = []
@@ -217,10 +295,30 @@ func _refresh_affordability(money: int) -> void:
 		var price: int = int(pack_data.get("price", 0))
 		var btn: Button = _buy_buttons[pack_id]
 		btn.disabled = money < price
+	for up_id: String in _upgrade_buttons.keys():
+		var up: Dictionary = Registry.upgrade(_tables, up_id)
+		var price: int = int(up.get("price", 0))
+		var max_level: int = int(up.get("max_level", 1))
+		var level: int = _upgrade_level(up_id)
+		var btn: Button = _upgrade_buttons[up_id]
+		var maxed: bool = level >= max_level
+		btn.text = "OWNED" if maxed else "BUY"
+		btn.disabled = maxed or money < price
+
+
+## Current purchased level of an upgrade via the bound callback (0 if no callback / unbound).
+func _upgrade_level(upgrade_id: String) -> int:
+	if not _get_upgrade_level.is_valid():
+		return 0
+	return _get_upgrade_level.call(upgrade_id) as int
 
 
 func _on_buy(pack_id: String) -> void:
 	buy_pressed.emit(pack_id)
+
+
+func _on_buy_upgrade(upgrade_id: String) -> void:
+	buy_upgrade_pressed.emit(upgrade_id)
 
 
 func _animate_in(motion: float) -> void:

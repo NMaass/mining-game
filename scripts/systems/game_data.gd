@@ -30,6 +30,15 @@ func load_all() -> bool:
 			load_errors.append("Failed to parse %s" % file_name)
 			continue
 		tables[stem] = parsed
+	# Surface any parse failures through the Logger so a malformed table in the field leaves
+	# evidence on disk instead of silently dropping (then crashing later with a confusing
+	# null-deref far from the cause). Behavior is unchanged — the same bool/array are returned;
+	# this only ADDS a log breadcrumb. Logger may not be ready yet under some boot orders, so it
+	# is looked up defensively (get_node_or_null) and skipped if absent.
+	if not load_errors.is_empty():
+		var logger: Node = get_node_or_null("/root/GameLog")
+		if logger != null and logger.has_method("report_error"):
+			logger.call("report_error", "GameData", "data load errors: %s" % str(load_errors))
 	return load_errors.is_empty()
 
 func _load_json(path: String) -> Variant:

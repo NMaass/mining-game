@@ -1,7 +1,7 @@
 [gd_scene load_steps=6 format=3 uid="uid://dblockgrid01"]
 
 [sub_resource type="PlaceholderTexture2D" id="PlaceholderTexture2D_block"]
-size = Vector2(208, 16)
+size = Vector2(272, 16)
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_block"]
 texture = SubResource("PlaceholderTexture2D_block")
@@ -32,6 +32,14 @@ texture_region_size = Vector2i(16, 16)
 11:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
 12:0/0 = 0
 12:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+13:0/0 = 0
+13:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+14:0/0 = 0
+14:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+15:0/0 = 0
+15:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
+16:0/0 = 0
+16:0/0/physics_layer_0/polygon_0/points = PackedVector2Array(-8, -8, 8, -8, 8, 8, -8, 8)
 
 [sub_resource type="TileSet" id="TileSet_block"]
 tile_size = Vector2i(16, 16)

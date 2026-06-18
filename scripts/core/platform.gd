@@ -41,3 +41,26 @@ static func descent_steps(hp_grid: Dictionary, platform_row: int,
 		else:
 			break
 	return steps
+
+
+## True if every cell in `row` from `start_x` to `start_x + width - 1` is cleared
+## (missing from hp_grid or HP <= 0).
+static func is_row_cleared(hp_grid: Dictionary, row: int, width: int, start_x: int = 0) -> bool:
+	for x in range(start_x, start_x + width):
+		var hp: int = int(hp_grid.get(Vector2i(x, row), 0))
+		if hp > 0:
+			return false
+	return true
+
+
+## Find the deepest consecutive cleared row starting at `support_row + 1`, capped
+## at `max_row`. Returns the new support row (may equal the current one).
+static func next_support_row(hp_grid: Dictionary, support_row: int,
+		width: int, max_row: int, start_x: int = 0) -> int:
+	var row: int = support_row
+	while row < max_row:
+		if is_row_cleared(hp_grid, row + 1, width, start_x):
+			row += 1
+		else:
+			break
+	return row

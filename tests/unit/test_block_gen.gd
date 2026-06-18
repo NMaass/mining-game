@@ -98,36 +98,55 @@ func _same_type_chance(weights: Dictionary) -> float:
 		p2 += p * p
 	return p2
 
-# ── Band selection (AC-5.1.3) ────────────────────────────────────────────────
+# ── Depth-scaled selection (AC-5.1.3 / AC-5.5.2, continuous curve) ────────────
 
-func test_surface_band_no_deep_only_blocks() -> void:
-	# AC-5.1.3: cells above band_surface.max_depth never yield deep-only blocks.
-	# Deep-only = appears in the deep band's weights but NOT the surface band's.
-	var surface_weights: Dictionary = Registry.band_weights_at(_tables, 0)
-	var deep_weights: Dictionary = Registry.band_weights_at(_tables, 50)
-	var deep_only: Array = []
-	for id in deep_weights.keys():
-		if not surface_weights.has(id):
-			deep_only.append(id)
-	# There must actually BE a deep-only block, else this test is vacuous.
-	assert_array(deep_only).override_failure_message(
-		"no deep-only block exists — band-exclusion test would be vacuous"
-	).is_not_empty()
+func _count_block(seed_val: int, block_id: String, x0: int, y0: int, w: int, h: int) -> int:
+	var n: int = 0
+	for y in range(y0, y0 + h):
+		for x in range(x0, x0 + w):
+			if BlockGen.block_at(_tables, seed_val, x, y) == block_id:
+				n += 1
+	return n
+
+func test_cap_rich_ore_is_far_more_common_deep_than_shallow() -> void:
+	# UNIT MAPGEN: the depth curve has NO hard band exclusion (it is a continuous lerp), but
+	# cap-only rich ore (gold/gem) is DRAMATICALLY more frequent at the cap depth than near the
+	# surface — the depth-reward signal the player feels (AC-5.5.2). Compare equal-size windows.
 	var seed_val: int = Registry.run_seed(_tables)
 	var width: int = Registry.mine_width_cells(_tables)
-	for y in range(40):
-		for x in range(width):
-			var block_id: String = BlockGen.block_at(_tables, seed_val, x, y)
-			assert_bool(deep_only.has(block_id)).override_failure_message(
-				"Surface cell (%d,%d) yielded deep-only block '%s'" % [x, y, block_id]
-			).is_false()
+	var cap: int = Registry.cap_depth_cells(_tables)
+	var rows: int = 40
+	var surface_gold: int = _count_block(seed_val, "ore_gold", 0, 0, width, rows)
+	var deep_gold: int = _count_block(seed_val, "ore_gold", 0, cap, width, rows)
+	assert_int(deep_gold).override_failure_message(
+		"gold at cap depth (%d) must far exceed gold near surface (%d) — depth reward (AC-5.5.2)" % [deep_gold, surface_gold]
+	).is_greater(surface_gold)
+	# Gold should be essentially absent near the very surface (its surface weight is 0).
+	var surface_gold_top: int = _count_block(seed_val, "ore_gold", 0, 0, width, 8)
+	assert_int(surface_gold_top).is_less(deep_gold)
 
-func test_deep_band_has_hard_rock() -> void:
-	# AC-5.1.3: the deep band produces its deep-only hard rock somewhere.
+func test_dirt_fades_out_with_depth() -> void:
+	# AC-5.1.3: dirt is the surface filler and is absent from the cap table, so it fades from
+	# common at the surface to (near-)none at the cap depth.
 	var seed_val: int = Registry.run_seed(_tables)
 	var width: int = Registry.mine_width_cells(_tables)
+	var cap: int = Registry.cap_depth_cells(_tables)
+	var surface_dirt: int = _count_block(seed_val, "dirt", 0, 0, width, 40)
+	var deep_dirt: int = _count_block(seed_val, "dirt", 0, cap, width, 40)
+	assert_int(surface_dirt).override_failure_message(
+		"dirt should be common near the surface (got %d)" % surface_dirt
+	).is_greater(0)
+	assert_int(deep_dirt).override_failure_message(
+		"dirt should fade out by the cap depth (surface %d, deep %d)" % [surface_dirt, deep_dirt]
+	).is_less(surface_dirt)
+
+func test_deep_has_hard_rock() -> void:
+	# AC-5.1.3: hard_rock (a cap-table block) appears deep, where its weight has ramped up.
+	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
+	var cap: int = Registry.cap_depth_cells(_tables)
 	var found := false
-	for y in range(40, 240):
+	for y in range(cap, cap + 60):
 		for x in range(width):
 			if BlockGen.block_at(_tables, seed_val, x, y) == "hard_rock":
 				found = true
@@ -135,7 +154,7 @@ func test_deep_band_has_hard_rock() -> void:
 		if found:
 			break
 	assert_bool(found).override_failure_message(
-		"No hard_rock found in 200 rows of the deep band"
+		"No hard_rock found in 60 rows at the cap depth"
 	).is_true()
 
 # ── Distribution (AC-5.1.3) ──────────────────────────────────────────────────
@@ -236,29 +255,67 @@ func test_relic_varies_with_seed() -> void:
 		"relic placement does not vary with seed: %s" % str(cells)
 	).is_greater(1)
 
-# ── Golden test (re-pinned to FastNoiseLite output) ──────────────────────────
+func test_relic_column_in_center_band_for_many_seeds() -> void:
+	# AC-5.6.1 (UNIT MAPGEN): the relic column is confined to |col - center| <= half (a 13-wide
+	# band at half=6). Holds for EVERY seed, not just the shipped one, so the relic always sits
+	# on/near the descent corridor in the infinite shaft.
+	var width: int = Registry.mine_width_cells(_tables)
+	var center: int = int(width / 2)
+	var half: int = Registry.relic_band_half_cells(_tables)
+	assert_int(half).is_greater_equal(0)
+	for seed_val in [0, 1, 7, 42, 1337, 9999, 123456, 999999983, 555, 31337]:
+		var cell: Vector2i = BlockGen.relic_cell(_tables, seed_val)
+		assert_int(absi(cell.x - center)).override_failure_message(
+			"seed %d placed relic col %d outside the center band |col-%d| <= %d" % [seed_val, cell.x, center, half]
+		).is_less_equal(half)
 
-func test_golden_gen_surface() -> void:
-	# Generate the fixed surface region and compare to the pinned golden file.
-	# Golden files are committed pins — a MISSING golden is a HARD FAILURE; the test
-	# NEVER self-writes it (AGENTS.md golden contract).
-	var seed_val: int = Registry.run_seed(_tables)
-	var width: int = 7  # Small pinned surface sample; independent of current mine width.
-	var height: int = 16  # One chunk.
-	var region: Array = BlockGen.generate_region(_tables, seed_val, 0, 0, width, height)
+func test_relic_column_spans_the_band_not_a_single_column() -> void:
+	# AC-5.6.1: the relic column actually VARIES across the band (it isn't pinned to one column),
+	# so the 13-wide band is meaningful. Sample many seeds and require > 1 distinct column.
+	var cols := {}
+	for seed_val in range(200):
+		cols[BlockGen.relic_cell(_tables, seed_val).x] = true
+	assert_int(cols.size()).override_failure_message(
+		"relic column never varies across 200 seeds — band constraint is degenerate"
+	).is_greater(1)
+
+# ── Golden tests (pin gen determinism at surface, deep, + the cap transition) ─
+# All goldens FAIL ON MISSING — never self-written by the test (AGENTS.md golden contract).
+# Regenerate deliberately with: godot --headless --path . -s tools/gen_golden.gd
+
+func _assert_golden(golden_path: String, region: Array) -> void:
 	var serialized: String = _serialize_region(region)
-
-	var golden_path := "res://tests/golden/gen_surface.txt"
 	assert_bool(FileAccess.file_exists(golden_path)).override_failure_message(
 		"Missing golden file: %s — commit the pinned golden; tests never self-write it." % golden_path
 	).is_true()
-
 	var f := FileAccess.open(golden_path, FileAccess.READ)
 	var expected: String = f.get_as_text()
 	f.close()
 	assert_str(serialized).override_failure_message(
-		"Golden gen_surface.txt mismatch — generation has drifted!"
+		"Golden %s mismatch — generation has drifted!" % golden_path
 	).is_equal(expected)
+
+func test_golden_gen_surface() -> void:
+	# Shallow region: dirt/copper/silver dominated (the surface anchor weights).
+	var seed_val: int = Registry.run_seed(_tables)
+	_assert_golden("res://tests/golden/gen_surface.txt",
+		BlockGen.generate_region(_tables, seed_val, 0, 0, 7, 16))
+
+func test_golden_gen_deep() -> void:
+	# UNIT MAPGEN: pin a region BELOW the cap depth so the frozen cap_weights are golden-locked.
+	# Proves the infinite descent is deterministic far from the surface (hard_rock/gold/gem rich).
+	var seed_val: int = Registry.run_seed(_tables)
+	var cap: int = Registry.cap_depth_cells(_tables)
+	_assert_golden("res://tests/golden/gen_deep.txt",
+		BlockGen.generate_region(_tables, seed_val, 0, cap + 50, 7, 16))
+
+func test_golden_gen_cap_transition() -> void:
+	# UNIT MAPGEN: pin a region straddling cap_depth_cells so the lerp→clamp boundary is locked
+	# (catches an off-by-one in t = clamp((y-surface)/(cap-surface), 0, 1)).
+	var seed_val: int = Registry.run_seed(_tables)
+	var cap: int = Registry.cap_depth_cells(_tables)
+	_assert_golden("res://tests/golden/gen_cap_transition.txt",
+		BlockGen.generate_region(_tables, seed_val, 0, cap - 8, 7, 16))
 
 # ── generate_region shape & validity ─────────────────────────────────────────
 

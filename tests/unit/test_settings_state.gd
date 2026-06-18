@@ -110,3 +110,75 @@ func test_from_state_sanitizes_out_of_range_values() -> void:
 	assert_float(s.music_volume).is_equal(0.0)
 	assert_float(s.motion_intensity).is_equal(1.0)
 	assert_float(s.text_scale).is_equal(s.text_scale_max)
+
+# ── Controls: elevator side + keybinds (D2, AC-5.10.1 controls; AC-5.11.1 persist) ──
+
+func test_elevator_side_default_from_data_and_toggle() -> void:
+	# AC-5.10.1: the elevator side default comes from /data (balance.settings.default_elevator_side),
+	# and the toggle flips left↔right.
+	var sd: Dictionary = _tables["balance"]["settings"]
+	var s := Settings.from_defaults(_tables)
+	assert_str(s.elevator_side).is_equal(str(sd["default_elevator_side"]))
+	var first: String = s.elevator_side
+	s.toggle_elevator_side()
+	assert_str(s.elevator_side).is_not_equal(first)
+	s.toggle_elevator_side()
+	assert_str(s.elevator_side).is_equal(first)
+
+func test_set_elevator_side_rejects_garbage() -> void:
+	# A bad side coerces to the fallback rather than corrupting the layout.
+	var s := Settings.from_defaults(_tables)
+	s.set_elevator_side("left")
+	assert_str(s.elevator_side).is_equal("left")
+	s.set_elevator_side("diagonal")
+	assert_str(s.elevator_side).is_equal(Settings.FALLBACK["elevator_side"])
+
+func test_keybinds_seed_from_injected_defaults() -> void:
+	# AC-5.10.1: keybind DEFAULTS are injected (the live InputMap), not code literals — from_defaults
+	# seeds the per-action keycode from the passed map; an unknown action / bad keycode is dropped.
+	var defaults := {"fire": 32, "aim_left": 4194319, "bogus": 5, "elevator_up": 0}
+	var s := Settings.from_defaults(_tables, defaults)
+	assert_int(s.keybind_for("fire")).is_equal(32)
+	assert_int(s.keybind_for("aim_left")).is_equal(4194319)
+	assert_int(s.keybind_for("bogus")).is_equal(0)        # unknown action dropped
+	assert_int(s.keybind_for("elevator_up")).is_equal(0)  # kc<=0 dropped (unbound)
+
+func test_set_keybind_rejects_unknown_action_and_bad_keycode() -> void:
+	var s := Settings.from_defaults(_tables, {"fire": 32})
+	assert_bool(s.set_keybind("fire", 65)).is_true()
+	assert_int(s.keybind_for("fire")).is_equal(65)
+	assert_bool(s.set_keybind("not_an_action", 70)).is_false()
+	assert_int(s.keybind_for("not_an_action")).is_equal(0)
+	assert_bool(s.set_keybind("aim_right", 0)).is_false()  # non-positive ignored
+	assert_int(s.keybind_for("aim_right")).is_equal(0)
+
+func test_set_keybind_rejects_collision_with_another_action() -> void:
+	# UNIT INFRA (crash-triage #1): binding `elevator_up` to a key `fire` already owns must be
+	# rejected so a single press can't trigger two gameplay actions (the highest-blast-radius
+	# rebind hazard — a throw also moving the elevator reads as a "weird state" report).
+	var s := Settings.from_defaults(_tables, {"fire": 32, "elevator_up": 4194320})
+	assert_bool(s.set_keybind("elevator_up", 32)).is_false()  # 32 is already fire's key
+	assert_int(s.keybind_for("elevator_up")).is_equal(4194320)  # unchanged
+	assert_int(s.keybind_for("fire")).is_equal(32)              # fire still owns it
+
+func test_set_keybind_allows_rebinding_action_to_its_own_key() -> void:
+	# Re-applying an action's CURRENT key is not a collision (idempotent) — only a DIFFERENT action
+	# holding the key blocks it.
+	var s := Settings.from_defaults(_tables, {"fire": 32})
+	assert_bool(s.set_keybind("fire", 32)).is_true()
+	assert_int(s.keybind_for("fire")).is_equal(32)
+
+func test_controls_round_trip_through_state() -> void:
+	# AC-5.11.1: elevator side + keybinds survive to_state → from_state exactly. A save MISSING an
+	# action inherits the injected default for that action (overlay-on-defaults).
+	var defaults := {"aim_left": 4194319, "aim_right": 4194321, "fire": 32,
+		"elevator_up": 4194320, "elevator_down": 4194322}
+	var s := Settings.from_defaults(_tables, defaults)
+	s.set_elevator_side("left")
+	s.set_keybind("fire", 65)            # rebind fire to A; leave the rest at the defaults
+	var restored := Settings.from_state(s.to_state(), _tables, defaults)
+	assert_str(restored.elevator_side).is_equal("left")
+	assert_int(restored.keybind_for("fire")).is_equal(65)
+	# The non-rebound actions persisted at their default keycodes too.
+	assert_int(restored.keybind_for("aim_left")).is_equal(4194319)
+	assert_int(restored.keybind_for("elevator_down")).is_equal(4194322)

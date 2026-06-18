@@ -20,11 +20,26 @@ var _has_impacted: bool = false
 var _detonated: bool = false
 var _block_pixel_size: int = 64
 
-## Seconds after launch during which platform contacts are ignored. Prevents a
-## sticky charge from freezing/detonating on the launcher immediately after spawn.
-const _platform_grace_seconds: float = 0.18
-## Counts down from _platform_grace_seconds; platform impacts are no-ops while > 0.
-var _grace_timer: float = 0.0
+## Motion/airtime gate (the "sticky bomb explodes instantly" fix — path (a)). A freshly-LAUNCHED
+## RigidBody2D reports sleeping==true for the first physics frame(s) before Rapier integrates the
+## launch impulse, so linear_velocity is ~0 and the body reads "at rest" on frame 0. Without a gate,
+## tick(delta, is_sleeping=true) sees `on_rest && sleeping && !freeze` and detonates the charge in
+## mid-air before it has ever moved or stuck. An on_rest charge may therefore only resolve via the
+## sleeping/settled path AFTER it has actually been in motion: it was launched AND has either been
+## airborne past MIN_AIRTIME_SEC or travelled past the muzzle by MIN_TRAVEL_PX. The no-soft-lock
+## guarantee survives — a charge that genuinely drifts to rest still resolves, it just has to clear
+## the (tiny) airtime gate first, which any airborne charge does within a few frames.
+var _launched: bool = false
+var _spawn_pos: Vector2 = Vector2.ZERO
+var _airborne_time: float = 0.0
+## Min motion before an on_rest charge may resolve via the sleeping path. Data-driven
+## (data/balance.json: charge_min_airtime_seconds / charge_min_travel_px); these are the code-side
+## FLOORS used when no /data value is injected (e.g. the headless charge tests). The data gate keeps
+## the airtime under the smallest sticky fuse so it never delays a real stick.
+const MIN_AIRTIME_SEC := 0.12      # ~7 physics frames at 60 Hz
+const MIN_TRAVEL_PX := 8.0         # must have left the muzzle by at least this far
+var _min_airtime_sec: float = MIN_AIRTIME_SEC
+var _min_travel_px: float = MIN_TRAVEL_PX
 
 ## The visual Sprite2D child (charge.tscn). Spin + squash-stretch are applied to THIS node ONLY,
 ## never the CollisionShape2D, so the circle collider stays intact (charge/physics tests unchanged).
@@ -34,13 +49,25 @@ const SPIN_PER_SPEED := 0.018
 ## Squash-stretch gain: at this speed (px/s) the sprite reaches the full stretch_max elongation.
 const STRETCH_REF_SPEED := 600.0
 const STRETCH_MAX := 0.35
+## Floor for a sticky charge's post-stick fuse: even a 0-fuse sticky reads as a brief stick, never
+## an instant pop. A sticky charge with a longer authored fuse_seconds uses that instead.
+const STICKY_MIN_DELAY := 0.15
 
 ## Set up the charge with throw parameters.
-func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64) -> void:
+## `min_airtime_sec` / `min_travel_px` are the motion gate (data-driven from balance.json); a
+## value <= 0 keeps the code-side floor (the headless tests rely on the default). The spawn position
+## is recorded so the gate can measure travel away from the muzzle.
+func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64,
+		min_airtime_sec: float = -1.0, min_travel_px: float = -1.0) -> void:
 	_params = params
 	_block_pixel_size = block_pixel_size
 	position = spawn_pos
+	_spawn_pos = spawn_pos
 	mass = params.mass
+	if min_airtime_sec > 0.0:
+		_min_airtime_sec = min_airtime_sec
+	if min_travel_px > 0.0:
+		_min_travel_px = min_travel_px
 
 	# Physics material.
 	physics_material_override = PhysicsMaterial.new()
@@ -50,20 +77,23 @@ func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64) 
 	# Continuous collision detection to prevent tunneling.
 	continuous_cd = RigidBody2D.CCD_MODE_CAST_RAY
 
-	# Collision: charge layer = 2, collides with terrain (layer 1) + platform (layer 3).
+	# Collision: charge layer = 2, collides with terrain (layer 1) only.
+	# The platform and player are visual-only anchors; charges pass through them.
 	collision_layer = 2
-	collision_mask = 1 | 4  # terrain=1, platform=4
+	collision_mask = 1  # terrain=1
 
 	# Connect body_entered for impact detection.
 	body_entered.connect(_on_body_entered)
-	# Begin the platform grace window so the launcher doesn't instantly trigger
-	# sticky / on_rest charges.
-	_grace_timer = _platform_grace_seconds
 
 ## Launch the charge at the given angle. Starts fuse timer for fuse_seconds mode.
 func launch(angle: float) -> void:
 	var impulse: Vector2 = _params.impulse_at_angle(angle)
 	apply_central_impulse(impulse)
+	# Launch is the ONLY thing that enables the settled/sleeping resolution path (the motion gate):
+	# until a charge has been launched and then actually moved, the frame-0 "fresh body reports
+	# sleeping before the impulse integrates" state must NOT count as "at rest".
+	_launched = true
+	_airborne_time = 0.0
 	# Start fuse timer on launch (not setup) so the countdown begins when thrown.
 	if _params.detonation_mode == "fuse_seconds":
 		_fuse_timer = _params.fuse_seconds
@@ -75,12 +105,40 @@ func _physics_process(delta: float) -> void:
 	# scales/rotates the SPRITE CHILD ONLY — never the CollisionShape2D — so the circle collider is
 	# untouched and the physics/charge tests stay green (the gate_risk for this cluster).
 	_update_flight_visual(delta)
-	# Advance fuse/timer logic.
+	tick(delta, sleeping)
+
+## Advance one frame of detonation logic: run the fuse, and (for on_rest) resolve when the body
+## has come to rest. Split out of _physics_process with `is_sleeping` injected so the REAL per-frame
+## path — including the sticky-freeze interaction — is headless-testable (physics callbacks don't
+## fire headless). This is the path the instant-sticky-detonation bug lived in.
+func tick(delta: float, is_sleeping: bool) -> void:
+	if _detonated:
+		return
 	step(delta)
-	# on_rest: detonate when the body has come to rest. v0.4 fix: this resolves
-	# even with NO prior impact (a charge that drifts to a stop must not soft-lock).
-	if _params and _params.detonation_mode == "on_rest" and sleeping:
-		on_settled()
+	if _launched:
+		_airborne_time += delta
+	# on_rest detonates when the body comes to rest (resolves even with NO prior impact, so a charge
+	# that drifts to a stop can't soft-lock — AC-5.4.2). But a STUCK sticky charge is "at rest" only
+	# because it froze; a frozen body reports sleeping=true, which would otherwise detonate it
+	# instantly on contact. Its stick-fuse (armed in on_impact) owns its detonation, so skip the
+	# sleeping path while frozen. AND a freshly-launched body reports sleeping=true on frame 0 before
+	# the impulse integrates — _has_been_in_motion() gates that out so the charge never resolves as
+	# "settled" before it has actually moved (the "explodes instantly" fix, path a).
+	if _params and _params.detonation_mode == "on_rest" and is_sleeping and not freeze:
+		if _has_been_in_motion():
+			on_settled()
+
+## True once the charge has actually moved after launch: it was launched AND (enough airtime has
+## elapsed OR it has travelled past the muzzle by _min_travel_px). Blocks the frame-0 "fresh body
+## reports sleeping before the impulse integrates" instant detonation while preserving the
+## no-soft-lock guarantee (any genuinely airborne charge clears the small airtime gate within a few
+## frames). An UNLAUNCHED charge (only setup) never counts as in-motion.
+func _has_been_in_motion() -> bool:
+	if not _launched:
+		return false
+	if _airborne_time >= _min_airtime_sec:
+		return true
+	return position.distance_to(_spawn_pos) >= _min_travel_px
 
 ## Tumble + squash-stretch the visual Sprite2D child by the charge's speed (cosmetic only).
 ## The sprite spins proportional to speed (a thrown charge visibly rolls) and elongates along its
@@ -109,44 +167,29 @@ func _on_body_entered(body: Node) -> void:
 func step(delta: float) -> void:
 	if _detonated:
 		return
-	# Grace window: only platform contacts are suppressed; everything else
-	# (fuse, terrain impacts, on_settled) ticks normally.
-	if _grace_timer > 0.0:
-		_grace_timer = maxf(_grace_timer - delta, 0.0)
 	if _fuse_timer > 0.0:
 		_fuse_timer -= delta
 		if _fuse_timer <= 0.0:
 			_detonate()
 
-## Return true if `body` is the platform (group or collision layer 4).
-func _is_platform_body(body: Node) -> bool:
-	if body == null:
-		return false
-	if body.is_in_group("platform"):
-		return true
-	if body is CollisionObject2D:
-		return (body.collision_layer & 4) != 0
-	return false
-
-## Handle a terrain/platform contact (sticky freeze, on_first_impact, sticky
-## on_rest delay). Idempotent-ish: re-entrant contacts after detonation are no-ops.
+## Handle a terrain contact (sticky freeze, on_first_impact, sticky on_rest delay).
+## Idempotent-ish: re-entrant contacts after detonation are no-ops.
+## The platform and player are NOT on the charge's collision mask, so the charge
+## passes through them cleanly — no grace-window hack is needed.
 func on_impact(body: Node = null) -> void:
 	if _detonated:
-		return
-	# Platform grace: ignore launcher contacts for a short window after spawn.
-	# Terrain and other bodies still resolve normally during grace.
-	if _grace_timer > 0.0 and _is_platform_body(body):
 		return
 	_has_impacted = true
 
 	# Sticky: freeze in place on first contact.
 	if _params.sticky and not freeze:
 		freeze = true
-		# A sticky on_rest charge is now at rest by definition: detonate (after a
-		# short delay for visual feedback). It will never "sleep" once frozen, so
-		# we cannot rely on on_settled() here.
+		# A frozen sticky charge can never resolve via on_settled() (a frozen body is treated as
+		# "sleeping", which the tick() guard now ignores), so its detonation is owned by a stick-fuse
+		# armed HERE: the authored fuse_seconds, floored to STICKY_MIN_DELAY so it sticks for a beat
+		# instead of popping instantly. THIS is the fix for "the sticky bomb explodes instantly".
 		if _params.detonation_mode == "on_rest":
-			_fuse_timer = 0.15
+			_fuse_timer = maxf(_params.fuse_seconds, STICKY_MIN_DELAY)
 
 	# on_first_impact: detonate immediately on first terrain contact.
 	if _params.detonation_mode == "on_first_impact":

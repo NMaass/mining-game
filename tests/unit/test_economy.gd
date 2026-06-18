@@ -23,20 +23,36 @@ func _load_real_tables() -> Dictionary:
 	(out["balance"] as Dictionary)["starting_money"] = 0
 	return out
 
+# ── Per-mine ore-value multiplier (Deep Mine — richer ore) ────────────────────
+
+func test_ore_value_mult_scales_credit() -> void:
+	# A deeper mine's ore-value multiplier scales every credit (richer ore pays more).
+	var econ := Economy.new(_tables)
+	var base: int = Registry.block_ore_value(_tables, "ore_gold")
+	econ.set_ore_value_mult(2.5)
+	assert_int(econ.credit(Vector2i(0, 0), "ore_gold")).is_equal(int(round(float(base) * 2.5)))
+	assert_int(econ.money).is_equal(int(round(float(base) * 2.5)))
+
+func test_ore_value_mult_default_is_one() -> void:
+	# Without a multiplier set, credits are unscaled (surface mine behavior).
+	var econ := Economy.new(_tables)
+	var base: int = Registry.block_ore_value(_tables, "ore_copper")
+	assert_int(econ.credit(Vector2i(1, 1), "ore_copper")).is_equal(base)
+
 # ── Ore crediting (AC-5.5.1) ───────────────────────────────────────────────
 
 func test_credit_ore_block() -> void:
 	# AC-5.5.1: breaking an ore block credits exactly its value
 	var econ := Economy.new(_tables)
 	var value: int = econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(value).is_equal(10)
-	assert_int(econ.money).is_equal(10)
+	assert_int(value).is_equal(12)
+	assert_int(econ.money).is_equal(12)
 
 func test_credit_gold_ore() -> void:
 	var econ := Economy.new(_tables)
 	var value: int = econ.credit(Vector2i(1, 1), "ore_gold")
-	assert_int(value).is_equal(35)
-	assert_int(econ.money).is_equal(35)
+	assert_int(value).is_equal(30)
+	assert_int(econ.money).is_equal(30)
 
 func test_credit_non_ore_block() -> void:
 	# AC-5.5.1: non-ore credits 0
@@ -56,14 +72,14 @@ func test_no_double_credit() -> void:
 	econ.credit(Vector2i(0, 0), "ore_copper")
 	var second: int = econ.credit(Vector2i(0, 0), "ore_copper")
 	assert_int(second).is_equal(0)
-	assert_int(econ.money).is_equal(10)  # Only credited once
+	assert_int(econ.money).is_equal(12)  # Only credited once
 
 func test_credit_accumulates() -> void:
 	var econ := Economy.new(_tables)
 	econ.credit(Vector2i(0, 0), "ore_copper")
 	econ.credit(Vector2i(1, 0), "ore_gold")
 	econ.credit(Vector2i(2, 0), "dirt")
-	assert_int(econ.money).is_equal(45)  # 10 + 35 + 0
+	assert_int(econ.money).is_equal(42)  # 12 + 30 + 0
 
 # ── Credit blast (convenience) ──────────────────────────────────────────────
 
@@ -76,17 +92,17 @@ func test_credit_blast() -> void:
 		Vector2i(2, 0): "rock",
 	}
 	var total: int = econ.credit_blast(cleared, block_ids)
-	assert_int(total).is_equal(45)  # 10 + 35 + 0
-	assert_int(econ.money).is_equal(45)
+	assert_int(total).is_equal(42)  # 12 + 30 + 0
+	assert_int(econ.money).is_equal(42)
 
 # ── Debit / can_afford ──────────────────────────────────────────────────────
 
 func test_debit_affordable() -> void:
 	var econ := Economy.new(_tables)
-	econ.credit(Vector2i(0, 0), "ore_gold")  # +35
-	assert_bool(econ.can_afford(30)).is_true()
-	assert_bool(econ.debit(30)).is_true()
-	assert_int(econ.money).is_equal(5)
+	econ.credit(Vector2i(0, 0), "ore_gold")  # +30
+	assert_bool(econ.can_afford(20)).is_true()
+	assert_bool(econ.debit(20)).is_true()
+	assert_int(econ.money).is_equal(10)
 
 func test_debit_unaffordable() -> void:
 	var econ := Economy.new(_tables)
@@ -169,7 +185,7 @@ func test_reset_run() -> void:
 	# AC-5.5.3: reset returns money to starting_money
 	var econ := Economy.new(_tables)
 	econ.credit(Vector2i(0, 0), "ore_gold")
-	assert_int(econ.money).is_equal(35)
+	assert_int(econ.money).is_equal(30)
 	econ.reset_run()
 	assert_int(econ.money).is_equal(0)  # starting_money = 0
 
@@ -177,8 +193,8 @@ func test_reset_run_clears_credit_tracking() -> void:
 	# After reset, the same cell can be credited again (new run).
 	var econ := Economy.new(_tables)
 	econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(econ.money).is_equal(10)
+	assert_int(econ.money).is_equal(12)
 	econ.reset_run()
 	var value: int = econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(value).is_equal(10)
-	assert_int(econ.money).is_equal(10)
+	assert_int(value).is_equal(12)
+	assert_int(econ.money).is_equal(12)

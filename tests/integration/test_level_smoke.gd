@@ -102,7 +102,7 @@ func test_authored_scene_nodes_present() -> void:
 	assert_int(mine.mine_width_cells).is_equal(Registry.mine_width_cells(_tables))
 	assert_object(mine.get_node_or_null("BlockGrid/BlockLayer")).is_not_null()
 	assert_object(mine.get_node_or_null("BlockGrid/CrackLayer")).is_not_null()
-	assert_object(mine.get_node_or_null("ShaftGuide")).is_not_null()
+	assert_object(mine.get_node_or_null("ShaftSupports")).is_not_null()
 	assert_object(mine.get_node_or_null("LightMaskLayer/LightMask")).is_not_null()
 	assert_object(mine.get_node_or_null("Platform")).is_not_null()
 	assert_object(mine.get_node_or_null("AimPreview")).is_not_null()
@@ -188,6 +188,60 @@ func test_launch_fx_write_color_for_web() -> void:
 	assert_int((trail.material as CanvasItemMaterial).blend_mode).is_equal(CanvasItemMaterial.BLEND_MODE_ADD)
 	trail.free()
 
+# ── Marching-dash aim preview (UNIT C, AC-5.3.1 family) ──────────────────────────
+
+func test_aim_preview_is_aimline_node2d_not_shader_line() -> void:
+	# AC-5.3.1 (aim preview): the AimPreview is now an AimLine Node2D that paints the dashed arc in
+	# _draw() (a canvas primitive that renders under GL-Compatibility/WebGL2). The previous Line2D +
+	# aim_dash.gdshader ShaderMaterial rendered NOTHING (see reports/aim-line-method.md), so assert the
+	# authored node is the new type — a regression here would silently revert to the blank line.
+	var mine := _boot_mine()
+	var line := mine.get_node_or_null("AimPreview")
+	assert_object(line).is_not_null()
+	assert_bool(line is AimLine).override_failure_message(
+		"AimPreview is not an AimLine Node2D — the shader-line that rendered nothing has crept back (AC-5.3.1)"
+	).is_true()
+	# The dead shader file must be gone (no path back to the broken render approach).
+	assert_bool(ResourceLoader.exists("res://shaders/aim_dash.gdshader")).override_failure_message(
+		"shaders/aim_dash.gdshader still exists — the broken aim-dash shader was not removed"
+	).is_false()
+
+func test_update_preview_populates_aimline_with_arc_points() -> void:
+	# AC-5.3.1: the refresh path feeds the AimLine the Aim.preview_path arc (the SAME points the old
+	# Line2D.add_point loop pushed). After _update_preview the line carries a drawable polyline (>= 2
+	# points) and the data-driven dash tunables — so _draw() has something to paint. Drive the PURE
+	# refresh path (input events don't fire headless).
+	var mine := _boot_mine()
+	var line := mine.get_node_or_null("AimPreview") as AimLine
+	assert_object(line).is_not_null()
+	mine.call("_update_preview")  # the shared refresh path the drag handler also calls
+	assert_bool(line.has_points()).override_failure_message(
+		"AimLine has no drawable arc after _update_preview — the preview would be blank (AC-5.3.1)"
+	).is_true()
+	# The dash tunables came from /data feel (not code constants) — period > 0 so dashes are visible.
+	assert_float(line.dash_px).is_equal_approx(Registry.feel_f(_tables, "aim_dash_px", 18.0), 0.001)
+	assert_float(line.gap_px).is_equal_approx(Registry.feel_f(_tables, "aim_gap_px", 14.0), 0.001)
+	assert_float(line.width).is_equal_approx(Registry.feel_f(_tables, "aim_line_width", 5.0), 0.001)
+	assert_float(line.alpha_mult).is_equal(1.0)
+
+func test_aim_march_speed_freezes_under_reduced_motion_and_pause() -> void:
+	# AC-5.3.1 + AC-5.10.4 (reduced motion): the dash march is GATED to 0 (a still pattern) when motion
+	# intensity <= 0 OR while the tree is paused (a modal is open). Drive the pure gate fn directly.
+	var mine := _boot_mine()
+	# Motion 1, not paused → the dash marches at the data-driven speed.
+	mine.settings.set_motion_intensity(1.0)
+	get_tree().paused = false
+	var march: float = Registry.feel_f(_tables, "aim_march_px", 60.0)
+	assert_float(float(mine.call("_aim_march_speed"))).is_equal_approx(march, 0.001)
+	# Reduced motion → the march is frozen (still dashes).
+	mine.settings.set_motion_intensity(0.0)
+	assert_float(float(mine.call("_aim_march_speed"))).is_equal(0.0)
+	# Paused (a modal open) → frozen even at full motion.
+	mine.settings.set_motion_intensity(1.0)
+	get_tree().paused = true
+	assert_float(float(mine.call("_aim_march_speed"))).is_equal(0.0)
+	get_tree().paused = false
+
 func test_hud_shows_money_and_depth_text() -> void:
 	# AC-5.8.1: after boot the HUD labels render the live readouts (money as "$N", depth, relic).
 	# This proves the controller actually pushes values into the authored labels (set_money etc.),
@@ -229,17 +283,108 @@ func test_hud_depth_odds_update_on_descent() -> void:
 			if hp > 0:
 				grid.damage(x, y, hp)
 
-	# Drive descent repeatedly until the platform reaches the deep band or stops moving.
-	for i in range(20):
-		var row_before: int = platform.target_row
-		mine._check_descent()
-		mine._refresh_all_ui()
-		if platform.target_row == row_before:
-			break
+	# Drive descent: with the full shaft cleared, supports extend to row 44 and then
+	# the platform follows via the support_reached signal.
+	var monitor := monitor_signals(mine._shaft_supports)
+	mine._check_descent()
+	await assert_signal(monitor).is_emitted("support_reached", [44])
+	mine._refresh_all_ui()
 
 	# The platform should have descended into the deep band and the odds text should change.
 	assert_int(platform.target_row).is_greater_equal(40)
 	assert_str(odds_label.text).is_not_equal(text_before)
+
+func test_shop_shaft_upgrade_narrows_real_clearance() -> void:
+	# Phase C (v0.5): buying Shaft Engineering from the shop (with in-dig money) narrows the
+	# REAL controller's required shaft clearance 9 → 7 for this dig, through the production
+	# buy path (mine.buy_money_upgrade). Proves the data → RunState → Registry → controller wiring.
+	var mine := _boot_mine()
+	assert_int(mine._shaft_w).is_equal(Registry.shaft_width(_tables))  # base width (9)
+	# Fund the purchase: credit synthetic gold cells until we can afford it.
+	var price: int = int(Registry.upgrade(_tables, "shaft_engineering").get("price", 0))
+	var per: int = Registry.block_ore_value(_tables, "ore_gold")
+	for i in range(int(ceil(float(price) / float(per)))):
+		mine.economy.credit(Vector2i(-100 - i, -100), "ore_gold")
+	assert_bool(mine.buy_money_upgrade("shaft_engineering")).is_true()
+	assert_int(mine._shaft_w).is_equal(7)
+	# A fresh dig resets the per-dig upgrade → clearance returns to base.
+	mine._start_dig()
+	assert_int(mine._shaft_w).is_equal(Registry.shaft_width(_tables))
+
+# ── Mine select: unlock + enter the Deep Mine, then return home (AC-5.12.x) ─────
+
+func test_mine_select_unlock_and_enter_deep_mine_then_returns_home() -> void:
+	# Phase C (v0.5): drive the REAL controller through the mine-select flow — fund money, unlock the
+	# deep mine, enter it — and prove the controller actually SWITCHED mines: the active mine is 'deep',
+	# the economy ore multiplier rose (a credited ore_gold pays MORE than on the surface), and a deep
+	# block has higher SCALED HP than the same block on the surface (the 1.8x hardness is live). Then
+	# after the deep dig ends + the next dig starts, the active/selected mine return to the home mine.
+	var mine := _boot_mine()
+	var home_id: String = Registry.default_mine_id(_tables)
+	assert_str(home_id).is_equal("surface")
+	# Boot starts in the home mine, and only it is unlocked.
+	assert_str(mine._active_mine_id).is_equal(home_id)
+	assert_bool(mine._unlocked_mines.has("deep")).is_false()
+
+	# Baseline: on the surface mine, an ore_gold cell pays its base value (mult 1.0).
+	var surface_pay: int = mine.economy.credit(Vector2i(-200, -200), "ore_gold")
+	assert_int(surface_pay).is_equal(Registry.block_ore_value(_tables, "ore_gold"))
+
+	# Fund the deep mine's access cost: credit synthetic high-value gold cells until affordable.
+	var access_cost: int = Registry.mine_access_cost(_tables, "deep")
+	assert_int(access_cost).is_greater(0)  # the deep mine is money-gated, not free
+	var per_gold: int = Registry.block_ore_value(_tables, "ore_gold")
+	for i in range(int(ceil(float(access_cost) / float(per_gold))) + 1):
+		mine.economy.credit(Vector2i(-300 - i, -300), "ore_gold")
+	assert_bool(mine.economy.can_afford(access_cost)).is_true()
+
+	# Unlock then enter the deep mine through the production controller API.
+	assert_bool(mine.unlock_mine("deep")).override_failure_message(
+		"unlock_mine('deep') failed despite sufficient funds — debit/unlock wiring dead?"
+	).is_true()
+	assert_bool(mine._unlocked_mines.has("deep")).is_true()
+	assert_bool(mine.enter_mine("deep")).override_failure_message(
+		"enter_mine('deep') rejected an unlocked mine — enter wiring dead?"
+	).is_true()
+
+	# The controller actually switched: the active grid belongs to the deep mine.
+	assert_str(mine._active_mine_id).override_failure_message(
+		"enter_mine('deep') did not switch the active mine"
+	).is_equal("deep")
+	# Per the design, the NEXT dig defaults back to the home mine (a deep run is one dig).
+	assert_str(mine._selected_mine_id).is_equal(home_id)
+
+	# The economy ore multiplier rose: the same ore_gold now pays MORE than it did on the surface.
+	var deep_pay: int = mine.economy.credit(Vector2i(-400, -400), "ore_gold")
+	assert_int(deep_pay).override_failure_message(
+		"deep mine ore_gold paid %d, not more than the surface %d — ore_value_mult not applied" % [deep_pay, surface_pay]
+	).is_greater(surface_pay)
+
+	# The deep grid carries the harder rock: the same block at the same depth scales to MORE HP than
+	# on the surface (the grid seeds per-cell HP from this exact derivation; 1.8x hardness is live).
+	var deep_mult: float = mine.grid.mine_hardness_mult
+	assert_float(deep_mult).is_greater(1.0)
+	var depth_probe: int = 30
+	var deep_hp: int = Registry.scaled_block_hp(_tables, "rock", depth_probe, deep_mult)
+	var surface_hp: int = Registry.scaled_block_hp(_tables, "rock", depth_probe, Registry.mine_hardness_mult(_tables, home_id))
+	assert_int(deep_hp).override_failure_message(
+		"a deep-mine block (%d HP) is not harder than the same surface block (%d HP)" % [deep_hp, surface_hp]
+	).is_greater(surface_hp)
+
+	# End the deep dig (collect the relic → accept → bank prestige) and start the next dig: the
+	# controller returns to the home mine for both the active grid and the selection.
+	var grid: BlockGrid = mine.grid
+	var relic := grid.relic_cell
+	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
+	grid.damage(relic.x, relic.y, 1 << 30)
+	_accept_relic_offer(mine)
+	mine._on_panel_next_dig()  # start the next dig from the dig-end panel
+
+	assert_str(mine._active_mine_id).override_failure_message(
+		"the dig after a deep run did not return to the home mine"
+	).is_equal(home_id)
+	assert_str(mine._selected_mine_id).is_equal(home_id)
+	assert_float(mine.grid.mine_hardness_mult).is_equal(Registry.mine_hardness_mult(_tables, home_id))
 
 # ── Portrait safe-area layout + touch targets (AC-5.8.5) ───────────────────────
 
@@ -555,24 +700,28 @@ func test_default_straight_down_throw_enters_open_shaft() -> void:
 
 # ── Descent after enough clears (AC-5.7.x end-to-end) ──────────────────────────
 
-func test_platform_descends_after_enough_clears() -> void:
-	# AC-5.7.2 end-to-end: clearing the threshold row beneath the platform descends it.
+func test_platform_descends_after_full_shaft_layer_cleared() -> void:
+	# AC-5.7.2 end-to-end (supports design): clearing the FULL shaft-width layer beneath
+	# the supports extends the supports, which then lowers the platform to that depth.
 	var mine := _boot_mine()
 	var grid: BlockGrid = mine.grid
 	var platform: Platform = mine.platform
 	var start_x: int = Registry.shaft_left_cell(_tables)
-	var threshold: int = Registry.platform_clear_threshold(_tables)
+	var shaft_w: int = Registry.shaft_width(_tables)
 	var start_row: int = platform.target_row
 
-	# Clear `threshold` cells in the row directly beneath the platform target.
+	# Clear every cell in the row directly beneath the platform target.
 	var clear_row: int = start_row + 1
-	for x in range(start_x, start_x + threshold):
+	for x in range(start_x, start_x + shaft_w):
 		var hp: int = grid.get_hp(x, clear_row)
 		if hp > 0:
 			grid.damage(x, clear_row, hp)
-	# Drive the controller's descent check via a real blast resolve nearby (or directly).
+
+	# Drive the controller's descent check; supports will extend to row 1, then platform drops.
+	var monitor := monitor_signals(mine._shaft_supports)
 	mine._check_descent()
-	assert_int(platform.target_row).is_greater(start_row)
+	await assert_signal(monitor).is_emitted("support_reached", [clear_row])
+	assert_int(platform.target_row).is_equal(clear_row)
 
 # ── Relic → dig-end → prestige → stronger next dig (AC-5.6.x, AC-5.8.4) ─────────
 
@@ -784,6 +933,101 @@ func test_settings_persist_across_boot() -> void:
 	assert_float(mine2.settings.sfx_volume).override_failure_message(
 		"settings did not persist across a fresh boot — save/load wiring dead?"
 	).is_equal_approx(0.15, 0.0001)
+
+# ── Controls: rebindable keys + elevator side (D2, AC-5.10.1 / AC-5.11.1) ─────────
+
+func test_apply_keybinds_updates_input_map_action_events() -> void:
+	# AC-5.10.1 (rebindable controls): applying a keybinds map rewrites the live InputMap so the
+	# action fires on the new PHYSICAL key. Drives the pure apply function directly (injected key
+	# EVENTS don't fire headless, but the InputMap rewrite is observable via action_get_events).
+	# Save + restore the live binding so this test doesn't leak a rebind into the rest of the suite.
+	assert_bool(InputMap.has_action("fire")).is_true()
+	var original: Array[InputEvent] = InputMap.action_get_events("fire")
+	# Rebind fire to physical 'J' (KEY_J).
+	Mine.apply_keybinds_to_input_map({"fire": KEY_J})
+	var events: Array[InputEvent] = InputMap.action_get_events("fire")
+	var has_j: bool = false
+	for ev in events:
+		if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_J:
+			has_j = true
+	assert_bool(has_j).override_failure_message(
+		"apply_keybinds_to_input_map did not bind 'fire' to the new physical key (InputMap rewrite dead?)"
+	).is_true()
+	# The old key event was replaced, not appended (exactly the rebound key now).
+	for ev in events:
+		assert_bool(ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_J).is_true()
+	# Restore the original binding so subsequent tests see the project default.
+	for ev in InputMap.action_get_events("fire"):
+		InputMap.action_erase_event("fire", ev)
+	for ev in original:
+		InputMap.action_add_event("fire", ev)
+
+func test_overlay_rebind_reaches_input_map_and_settings() -> void:
+	# AC-5.10.1: committing a rebind through the overlay updates the shared SettingsState AND mirrors
+	# into the live InputMap (the controller's keybind_rebound wiring). commit_rebind is the headless
+	# seam for the capture path (the real path reads a key event, which doesn't fire headless).
+	var mine := _boot_mine()
+	var original: Array[InputEvent] = InputMap.action_get_events("elevator_up")
+	mine.hud.nav_pressed.emit()  # open the overlay so it is configured/active
+	mine.overlay.commit_rebind("elevator_up", KEY_K)
+	assert_int(mine.settings.keybind_for("elevator_up")).override_failure_message(
+		"overlay rebind did not reach the shared SettingsState"
+	).is_equal(KEY_K)
+	var found: bool = false
+	for ev in InputMap.action_get_events("elevator_up"):
+		if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_K:
+			found = true
+	assert_bool(found).override_failure_message(
+		"overlay rebind did not reach the live InputMap (keybind_rebound wiring dead?)"
+	).is_true()
+	mine.overlay.close()
+	# Restore so the suite's other tests see the default elevator_up binding.
+	for ev in InputMap.action_get_events("elevator_up"):
+		InputMap.action_erase_event("elevator_up", ev)
+	for ev in original:
+		InputMap.action_add_event("elevator_up", ev)
+
+func test_elevator_side_setting_flips_hud_layout() -> void:
+	# AC-5.10.1 (controls layout): the elevator-side setting flips which screen edge the
+	# ElevatorControls are laid out against. Drives the REAL HUD apply path (no input), checking
+	# the resolved rect, not internal state.
+	var mine := _boot_mine()
+	var hud := mine.get_node("Hud") as Hud
+	var elevator := mine.get_node("Hud/ElevatorControls") as Control
+	var logical := Vector2i(720, 1280)
+	var safe := Rect2i(0, 0, 720, 1280)
+
+	hud.set_elevator_side("right")
+	hud.apply_layout_with(Vector2i(720, 1280), safe, logical)
+	var right_left_edge: float = elevator.offset_left
+
+	hud.set_elevator_side("left")
+	hud.apply_layout_with(Vector2i(720, 1280), safe, logical)
+	var left_left_edge: float = elevator.offset_left
+
+	# On the LEFT side the controls sit nearer x=0; on the RIGHT they sit far across the screen.
+	assert_float(left_left_edge).override_failure_message(
+		"elevator-side 'left' did not move ElevatorControls toward the left edge (was %.1f vs right %.1f)"
+		% [left_left_edge, right_left_edge]
+	).is_less(right_left_edge)
+	assert_float(left_left_edge).is_less(float(logical.x) * 0.5)
+	assert_float(right_left_edge).is_greater(float(logical.x) * 0.5)
+	assert_str(hud.elevator_side()).is_equal("left")
+
+func test_elevator_side_setting_persists_across_boot() -> void:
+	# AC-5.11.1: toggling the elevator side autosaves and the next boot restores it.
+	var mine1 := _boot_mine()
+	var start_side: String = mine1.settings.elevator_side
+	mine1.hud.nav_pressed.emit()
+	mine1.overlay.elevator_side_button().pressed.emit()  # toggle
+	mine1.overlay.close()
+	var toggled: String = mine1.settings.elevator_side
+	assert_str(toggled).is_not_equal(start_side)
+
+	var mine2 := _boot_mine()
+	assert_str(mine2.settings.elevator_side).override_failure_message(
+		"elevator side did not persist across a fresh boot"
+	).is_equal(toggled)
 
 # ── Motion intensity (AC-5.10.1 / AC-5.10.4) + text-scale reflow (AC-5.8.6) ──────
 
@@ -1233,6 +1477,51 @@ func test_cooldown_expires_and_re_enables_button() -> void:
 
 	assert_bool(button.disabled).is_false()
 
+var _detonations_seen: int = 0
+func _count_detonation(_cell: Vector2i, _params: ThrowParams) -> void:
+	_detonations_seen += 1
+
+func test_cooldown_visual_drains_to_completion_independent_of_detonation() -> void:
+	# v0.5 cooldown unit (AC-5.3.3 throw commit / AC-5.13.x feel): the throw cooldown is a PURE
+	# timer armed the instant the charge is released. It must drain to completion every frame WITHOUT
+	# any detonation event — the in-flight charge never impacts, yet the cooldown still finishes.
+	var mine := _boot_mine()
+	mine.select_charge(Registry.free_charge_id(_tables))
+	var fill: ColorRect = mine.get_node("Hud/Bottom/ThrowButton/CooldownFill")
+	var label: Label = mine.get_node("Hud/Bottom/ThrowButton/CooldownLabel")
+
+	_detonations_seen = 0
+	var charge: Charge = mine.throw_at(0.0)
+	assert_object(charge).is_not_null()
+	# Watch for ANY detonation: the cooldown must finish without one firing.
+	charge.detonated.connect(_count_detonation)
+
+	# Right after release the cooldown is live: the drain band is visible and the label counts down.
+	assert_bool(fill.visible).is_true()
+	assert_str(label.text).is_not_empty()
+	var first_height: float = fill.size.y
+	assert_float(first_height).is_greater(0.0)
+
+	# Tick the cooldown forward in small frames WITHOUT ever detonating the charge. The band must
+	# shrink monotonically every frame (proving it updates per-frame, not only on expiry).
+	var cooldown_s: float = Registry.balance(_tables, "throw_cooldown_seconds", 1.0)
+	var step: float = cooldown_s / 5.0
+	var prev_height: float = first_height
+	for _i in range(4):
+		mine._process(step)
+		# Still cooling: the band is present and has drained (shorter than the previous frame).
+		assert_bool(fill.visible).is_true()
+		assert_float(fill.size.y).is_less(prev_height)
+		prev_height = fill.size.y
+
+	# One more tick finishes the cooldown: the band is hidden and the label clears.
+	mine._process(step + 0.1)
+	assert_bool(fill.visible).is_false()
+	assert_str(label.text).is_empty()
+
+	# The whole cooldown ran as a pure timer: no detonation event ever fired.
+	assert_int(_detonations_seen).is_equal(0)
+
 # ── Shop modal (buy packs with odds + affordability) ───────────────────────────
 
 func test_shop_modal_is_authored_and_lists_packs() -> void:
@@ -1323,6 +1612,7 @@ func test_elevator_down_moves_platform_and_updates_depth() -> void:
 	# the run-state depth readout (same as auto-descent).
 	var mine := _boot_mine()
 	var platform: Platform = mine.platform
+	platform.support_row = 100  # supports already deep (infinite shaft — no mine floor)
 	var start_row: int = platform.target_row
 	var up: Button = mine.get_node("Hud/ElevatorControls/ElevatorUp")
 	var down: Button = mine.get_node("Hud/ElevatorControls/ElevatorDown")
@@ -1337,29 +1627,34 @@ func test_elevator_up_moves_platform_back_to_top() -> void:
 	# Wave 4: after moving down, pressing up returns the platform toward the surface.
 	var mine := _boot_mine()
 	var platform: Platform = mine.platform
+	platform.support_row = 100  # supports already deep (infinite shaft — no mine floor)
 	mine._on_elevator_down()
 	var row_after_down: int = platform.target_row
 	mine._on_elevator_up()
 	assert_int(platform.target_row).is_equal(row_after_down - 1)
 	assert_int(mine.run_state.depth).is_equal(platform.target_row)
 
-func test_elevator_buttons_gray_at_top_and_bottom_limits() -> void:
-	# Wave 4: the up arrow is disabled at row 0; the down arrow is disabled at the
-	# bottom row of the mine.
+func test_elevator_buttons_hidden_at_top_and_bottom_limits() -> void:
+	# v0.5: the elevator buttons HIDE (not just disable) in the direction you can't go — the up
+	# arrow is hidden at row 0, the down arrow hidden at the bottom of the reachable (supported) span.
 	var mine := _boot_mine()
+	var platform: Platform = mine.platform
+	# UNIT MAPGEN: the infinite shaft has no mine floor — the reachable bottom is the deepest
+	# SUPPORTED row. Use a small finite support depth so "the bottom" is the support row here.
+	var bottom: int = 6
+	platform.support_row = bottom  # supports reach this row for this test
 	var up: Button = mine.get_node("Hud/ElevatorControls/ElevatorUp")
 	var down: Button = mine.get_node("Hud/ElevatorControls/ElevatorDown")
 
-	# At the top: up disabled, down enabled.
+	# At the top: up hidden (can't go higher), down shown (can descend).
 	mine._refresh_all_ui()
-	assert_bool(up.disabled).is_true()
-	assert_bool(down.disabled).is_false()
+	assert_bool(up.visible).is_false()
+	assert_bool(down.visible).is_true()
 
 	# Move to the bottom of the mine.
-	var bottom: int = Registry.mine_height_cells(_tables) - 1
 	for i in range(bottom):
 		mine._on_elevator_down()
 	mine._refresh_all_ui()
 	assert_int(mine.platform.target_row).is_equal(bottom)
-	assert_bool(up.disabled).is_false()
-	assert_bool(down.disabled).is_true()
+	assert_bool(up.visible).is_true()
+	assert_bool(down.visible).is_false()

@@ -50,21 +50,53 @@ func test_dead_zone_no_change() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(102, 103), current)
 	assert_float(angle).is_equal(current)
 
-func test_angle_clamped() -> void:
-	# AC-5.3.1: an extreme drag is clamped to the valid range.
+func test_angle_in_full_circle_range() -> void:
+	# AC-5.3.1 (v0.5 full 360°): any drag yields an angle in atan2's (-PI, PI] range — the whole
+	# circle is reachable, there is no forward-arc clamp.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(500, 100))
 	assert_bool(angle <= Aim.MAX_ANGLE).is_true()
 	assert_bool(angle >= Aim.MIN_ANGLE).is_true()
 
-func test_shallow_upward_drag_clamps_to_max() -> void:
-	# An upward-right drag steeper than MAX_ANGLE clamps to MAX_ANGLE.
-	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(150, 0))
-	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
+# ── Full 360° aim (v0.5): the player can aim ANY direction, including straight/shallow upward ──
+# Old behavior clamped to a forward arc (~±1.92 rad), blocking upward lobs. Those clamp tests are
+# replaced by these: an upward drag now produces an upward (|angle| > PI/2) launch angle.
 
-func test_shallow_upward_drag_clamps_to_min() -> void:
-	# A nearly-horizontal/left drag with shallow upward component clamps to MIN_ANGLE.
+func test_drag_up_right_aims_upward() -> void:
+	# Dragging up-and-right (delta = +x, -y) aims into the upper-right hemisphere: angle > PI/2.
+	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(150, 0))
+	# atan2(50, -100) ≈ 2.677 rad — past horizontal, pointing upward (NOT clamped to ~1.92).
+	assert_float(angle).is_equal_approx(atan2(50.0, -100.0), 0.001)
+	assert_bool(absf(angle) > PI / 2.0).is_true()  # genuinely upward, beyond the old clamp
+
+func test_drag_up_left_aims_upward() -> void:
+	# Dragging up-and-left aims into the upper-left hemisphere: angle < -PI/2.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(0, 0))
-	assert_float(angle).is_equal_approx(Aim.MIN_ANGLE, 0.001)
+	assert_float(angle).is_equal_approx(atan2(-100.0, -100.0), 0.001)  # ≈ -2.356 rad
+	assert_bool(angle < -PI / 2.0).is_true()
+
+func test_drag_straight_up_aims_up() -> void:
+	# Dragging straight up (delta = (0, -y)) aims straight up: |angle| == PI. atan2(0, -1) == PI.
+	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(100, 0))
+	assert_float(absf(angle)).is_equal_approx(PI, 0.001)
+
+func test_drag_direction_is_honored_unclamped() -> void:
+	# AC-5.3.1: the launch direction matches the drag direction exactly (no clamp warps it). The
+	# direction vector built from the angle points the same way as the (down-y) drag delta.
+	var start := Vector2(100, 100)
+	var current := Vector2(40, 10)  # up-and-left
+	var angle: float = Aim.angle_from_drag(start, current)
+	var dir: Vector2 = Aim.angle_to_direction(angle)  # (sin a, cos a) — same x/y convention as drag
+	var drag := (current - start).normalized()
+	assert_float(dir.x).is_equal_approx(drag.x, 0.001)
+	assert_float(dir.y).is_equal_approx(drag.y, 0.001)
+
+func test_wrap_angle_normalizes_to_circle() -> void:
+	# AC-5.3.1 (v0.5): wrap_angle keeps the angle in (-PI, PI] so a continuous glide never runs away.
+	assert_float(Aim.wrap_angle(0.0)).is_equal_approx(0.0, 0.0001)
+	# 1.5 turns past straight-down wraps back to the half-turn (straight up), within the circle.
+	var wrapped: float = Aim.wrap_angle(3.0 * PI)
+	assert_bool(wrapped > -PI - 0.0001 and wrapped <= PI + 0.0001).is_true()
+	assert_float(absf(wrapped)).is_equal_approx(PI, 0.0001)
 
 func test_default_angle_is_straight_down() -> void:
 	# The default launch angle is 0.0 radians = straight down.
@@ -312,3 +344,55 @@ func test_cooldown_progress_and_text() -> void:
 	tc.advance_cooldown(1.0)
 	assert_float(tc.cooldown_progress).is_equal(1.0)
 	assert_str(tc.cooldown_text).is_empty()
+
+# ── Keyboard held-aim (D1) — Aim.keyboard_angle_step (AC-5.3.1/5.3.2) ────────
+# Key events do NOT fire headless, so the wiring (mine.gd._apply_keyboard_aim) drives this PURE
+# helper; the helper is what we test directly. It maps a held direction + frame delta to a new
+# clamped angle (forgiving/smooth — no precision requirement).
+
+func test_keyboard_aim_right_increases_angle() -> void:
+	# AC-5.3.1: holding aim_right (+1) nudges the angle positive (toward the right).
+	var a: float = Aim.keyboard_angle_step(0.0, 1, 90.0, 0.1)
+	assert_bool(a > 0.0).is_true()
+
+func test_keyboard_aim_left_decreases_angle() -> void:
+	# AC-5.3.1: holding aim_left (-1) nudges the angle negative (toward the left).
+	var a: float = Aim.keyboard_angle_step(0.0, -1, 90.0, 0.1)
+	assert_bool(a < 0.0).is_true()
+
+func test_keyboard_aim_no_direction_is_unchanged() -> void:
+	# dir 0 (nothing held / both held) leaves the angle exactly where it was.
+	assert_float(Aim.keyboard_angle_step(0.4, 0, 90.0, 0.1)).is_equal(0.4)
+
+func test_keyboard_aim_scales_with_delta() -> void:
+	# AC-5.3.2 forgiving + frame-rate independent: a larger delta moves the angle proportionally more.
+	var small: float = Aim.keyboard_angle_step(0.0, 1, 90.0, 0.05)
+	var big: float = Aim.keyboard_angle_step(0.0, 1, 90.0, 0.10)
+	assert_float(big).is_equal_approx(small * 2.0, 0.0001)
+
+func test_keyboard_aim_uses_data_rate() -> void:
+	# AC-5.3.2: the step magnitude is exactly rate(deg/sec)*delta converted to radians — proves the
+	# data-driven rate is honored (not a code constant).
+	var a: float = Aim.keyboard_angle_step(0.0, 1, 90.0, 1.0)
+	assert_float(a).is_equal_approx(deg_to_rad(90.0), 0.0001)
+
+func test_keyboard_aim_wraps_past_straight_up() -> void:
+	# AC-5.3.1 (v0.5 full 360°): the keyboard glide WRAPS at the top instead of saturating, so a held
+	# key sweeps continuously around the circle (no hard stop). Stepping right from just-below-PI by a
+	# bit more than the remaining arc lands just past -PI (i.e. wraps into the negative hemisphere).
+	var a: float = Aim.keyboard_angle_step(PI - 0.05, 1, rad_to_deg(0.1), 1.0)  # +0.1 rad step
+	assert_bool(a <= PI + 0.0001 and a > -PI - 0.0001).is_true()  # stayed in the circle
+	assert_bool(a < 0.0).is_true()  # wrapped from +near-PI to the -PI side
+
+func test_keyboard_aim_result_always_in_circle() -> void:
+	# A huge step never escapes (-PI, PI]: the wrap keeps the angle bounded (no runaway).
+	var a: float = Aim.keyboard_angle_step(0.0, 1, 100000.0, 1.0)
+	assert_bool(a > -PI - 0.0001 and a <= PI + 0.0001).is_true()
+
+func test_keyboard_aim_zero_rate_is_inert() -> void:
+	# A 0/negative rate (gate-rejected, but defensive) makes no change — the early-return path.
+	assert_float(Aim.keyboard_angle_step(0.3, 1, 0.0, 0.1)).is_equal(0.3)
+
+func test_keyboard_aim_zero_delta_is_inert() -> void:
+	# A 0 delta (paused / first frame) makes no change.
+	assert_float(Aim.keyboard_angle_step(0.3, 1, 90.0, 0.0)).is_equal(0.3)

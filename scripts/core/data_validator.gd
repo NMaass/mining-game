@@ -22,7 +22,9 @@ static func validate(tables: Dictionary) -> Array:
 	var blocks: Dictionary = _dict(tables, "block_types", errors)
 	var explosives: Dictionary = _dict(tables, "explosives", errors)
 	var packs: Dictionary = _dict(tables, "packs", errors)
-	var bands: Variant = tables.get("depth_bands")
+	# depth_bands.json is now the CONTINUOUS depth CURVE descriptor (an object), not the
+	# old discrete band array — see _check_depth_curve (UNIT MAPGEN infinite descent).
+	var curve: Variant = tables.get("depth_bands")
 	var art_sources: Dictionary = _dict(tables, "art_sources", errors)
 
 	_check_balance(balance, errors)
@@ -30,19 +32,24 @@ static func validate(tables: Dictionary) -> Array:
 	_check_settings(balance, errors)
 	_check_vfx(balance, errors)
 	_check_feel(balance, errors)
+	_check_elevator(balance, errors)
 	_check_mine_geometry(balance, errors)
 	_check_blocks(blocks, errors)
 	_check_palette(tables.get("palette"), blocks, errors)
 	_check_art_sources(art_sources, blocks, errors)
-	_check_bands(bands, blocks, errors)
-	_check_band_depth_reward(bands, blocks, errors)
+	_check_depth_curve(curve, blocks, errors)
+	_check_depth_reward_monotone(curve, blocks, errors)
 	_check_explosives(explosives, balance, errors)
 	_check_packs(packs, explosives, errors)
-	_check_free_charge(explosives, blocks, bands, balance, errors)
+	_check_pack_affordability(packs, balance, errors)
+	_check_free_charge(explosives, blocks, curve, balance, errors)
 	_check_generation(tables.get("generation"), errors)
-	_check_relics(tables.get("relics"), bands, balance, errors)
+	_check_relics(tables.get("relics"), curve, balance, errors)
 	_check_prestige(tables.get("prestige"), errors)
+	_check_upgrades(tables.get("upgrades"), balance, errors)
+	_check_mines(tables.get("mines"), balance, errors)
 	_check_audio(tables.get("audio"), errors)
+	_check_logging(tables.get("logging"), errors)
 	return errors
 
 static func _dict(tables: Dictionary, key: String, errors: Array) -> Dictionary:
@@ -59,13 +66,18 @@ static func _check_balance(b: Dictionary, errors: Array) -> void:
 	# Strictly-positive required keys. HP-scaling multipliers (AC-5.2.1) are
 	# required here so the no-stall solvability check (AC-5.5.5) can verify the
 	# free charge against the SCALED floor HP, not just the unscaled table value.
-	for k in ["block_pixel_size", "shaft_width_cells", "chunk_height_cells", "crack_stages",
+	for k in ["block_pixel_size", "shaft_width_cells", "platform_width_cells", "chunk_height_cells", "crack_stages",
 			"max_blast_radius_cells", "active_body_cap_desktop", "active_body_cap_web",
-			"depth_hp_mult_per_cell", "mine_hardness_mult_max"]:
+			"depth_hp_mult_per_cell", "mine_hardness_mult_max", "max_depth_hp_mult"]:
 		if not b.has(k):
 			errors.append("balance: missing '%s'" % k)
 		elif float(b[k]) <= 0.0:
 			errors.append("balance: '%s' must be > 0" % k)
+	# max_depth_hp_mult is the HP ceiling in the INFINITE shaft (UNIT MAPGEN). It must be
+	# >= 1 (the surface multiplier) or it would make deep cells WEAKER than surface cells —
+	# the bound has to cap growth, never invert it. Mirrors the EV cap.
+	if b.has("max_depth_hp_mult") and float(b.get("max_depth_hp_mult", 0.0)) < 1.0:
+		errors.append("balance: 'max_depth_hp_mult' must be >= 1.0 (the HP ceiling can't fall below the surface multiplier)")
 	# run_seed must be present (logical-determinism seed); any int is acceptable.
 	if not b.has("run_seed"):
 		errors.append("balance: missing 'run_seed'")
@@ -106,13 +118,34 @@ static func _check_balance(b: Dictionary, errors: Array) -> void:
 		var fp: float = float(b.get("blast_fuzz_pct", -1.0))
 		if fp < 0.0 or fp >= 1.0:
 			errors.append("balance: 'blast_fuzz_pct' must be in [0, 1)")
+	if not b.has("throw_cooldown_seconds"):
+		errors.append("balance: missing 'throw_cooldown_seconds'")
+	elif float(b.get("throw_cooldown_seconds", 0.0)) <= 0.0:
+		errors.append("balance: 'throw_cooldown_seconds' must be > 0")
+	if not b.has("camera_platform_screen_fraction"):
+		errors.append("balance: missing 'camera_platform_screen_fraction'")
+	else:
+		var frac: float = float(b.get("camera_platform_screen_fraction", -1.0))
+		if frac < 0.0 or frac > 1.0:
+			errors.append("balance: 'camera_platform_screen_fraction' must be in [0,1]")
+	if not b.has("support_extend_seconds"):
+		errors.append("balance: missing 'support_extend_seconds'")
+	elif float(b.get("support_extend_seconds", 0.0)) <= 0.0:
+		errors.append("balance: 'support_extend_seconds' must be > 0")
 
 static func _check_mine_geometry(b: Dictionary, errors: Array) -> void:
-	for k in ["mine_width_cells", "mine_height_cells"]:
-		if not b.has(k):
-			errors.append("balance: missing '%s'" % k)
-		elif int(b.get(k, 0)) <= 0:
-			errors.append("balance: '%s' must be > 0" % k)
+	# mine_width_cells must be a positive finite width (the shaft has finite width).
+	if not b.has("mine_width_cells"):
+		errors.append("balance: missing 'mine_width_cells'")
+	elif int(b.get("mine_width_cells", 0)) <= 0:
+		errors.append("balance: 'mine_width_cells' must be > 0")
+	# mine_height_cells: 0 (or negative) is the INFINITE-descent sentinel (UNIT MAPGEN) —
+	# the shaft has no bottom and the relic ends the dig at a finite depth. A POSITIVE value
+	# still means a bounded mine; a missing key fails the gate (geometry is data).
+	if not b.has("mine_height_cells"):
+		errors.append("balance: missing 'mine_height_cells'")
+	elif int(b.get("mine_height_cells", 1)) < 0:
+		errors.append("balance: 'mine_height_cells' must be >= 0 (0 = infinite shaft)")
 	if b.has("mine_width_cells") and b.has("shaft_width_cells"):
 		var mine_w: int = int(b.get("mine_width_cells", 0))
 		var shaft_w: int = int(b.get("shaft_width_cells", 0))
@@ -120,6 +153,13 @@ static func _check_mine_geometry(b: Dictionary, errors: Array) -> void:
 			errors.append("balance: 'shaft_width_cells' (%d) must be <= 'mine_width_cells' (%d)" % [shaft_w, mine_w])
 		if shaft_w % 2 == 0:
 			errors.append("balance: 'shaft_width_cells' must be odd so the corridor has a center line")
+	if b.has("shaft_width_cells") and b.has("platform_width_cells"):
+		var shaft_w2: int = int(b.get("shaft_width_cells", 0))
+		var plat_w: int = int(b.get("platform_width_cells", 0))
+		if plat_w > shaft_w2:
+			errors.append("balance: 'platform_width_cells' (%d) must be <= 'shaft_width_cells' (%d)" % [plat_w, shaft_w2])
+		if plat_w % 2 == 0:
+			errors.append("balance: 'platform_width_cells' must be odd so the platform has a center line")
 	if b.has("mine_height_cells") and b.has("chunk_height_cells"):
 		var mine_h: int = int(b.get("mine_height_cells", 0))
 		var chunk_h: int = int(b.get("chunk_height_cells", 0))
@@ -241,6 +281,15 @@ static func _check_settings(b: Dictionary, errors: Array) -> void:
 			var d: float = float(sd.get("default_text_scale", 0.0))
 			if d < lo or d > hi:
 				errors.append("balance.settings: 'default_text_scale' %s must be within [%s,%s] (AC-5.10.1)" % [str(d), str(lo), str(hi)])
+	# Elevator-side default (D2 controls): must be one of {"left","right"} — the on-screen elevator
+	# arrows are laid out against that screen edge (AC-5.10.1 controls layout). Defaulting it in /data
+	# keeps the value a tunable, not a code literal.
+	if not sd.has("default_elevator_side"):
+		errors.append("balance.settings: missing 'default_elevator_side' (AC-5.10.1 controls)")
+	else:
+		var side: String = str(sd.get("default_elevator_side", ""))
+		if side != "left" and side != "right":
+			errors.append("balance.settings: 'default_elevator_side' '%s' must be 'left' or 'right' (AC-5.10.1)" % side)
 
 ## VFX feel table (v0.5 arcade pass). Every magnitude that drives the juice — camera shake,
 ## zoom punch, hit-stop, explosion flash/ring, debris cap, value popups — is a /data tunable,
@@ -310,7 +359,8 @@ static func _check_vfx(b: Dictionary, errors: Array) -> void:
 ## that silently reads 0 can't disable a cue. `throw_button_squash` is a (0,1] compress fraction
 ## (1 = no squash, 0 = collapse to nothing — both excluded); the pop duration is strictly > 0;
 ## `aim_scroll_speed`/`recoil_px` are >= 0 (0 = a static line / no kick, still valid); the muzzle
-## flash count is >= 1 (a one-shot burst needs at least one particle to read).
+## flash count is >= 1 (a one-shot burst needs at least one particle to read). `keyboard_aim_deg_per_sec`
+## (D1) is the held-arrow-key aim rate in deg/sec and must be strictly > 0 (a 0 rate disables it).
 static func _check_feel(b: Dictionary, errors: Array) -> void:
 	if not b.has("feel"):
 		errors.append("balance: missing 'feel' launch/control-feel table (v0.5 arcade tunables)")
@@ -328,22 +378,65 @@ static func _check_feel(b: Dictionary, errors: Array) -> void:
 		if sq <= 0.0 or sq > 1.0:
 			errors.append("balance.feel: 'throw_button_squash' %s must be in (0,1]" % str(sq))
 	# Strictly-positive durations + widths (a 0 here would snap with no animation / an invisible line).
-	for k in ["throw_button_pop_seconds", "aim_line_width"]:
+	# keyboard_aim_deg_per_sec (D1) is the held-key aim rate in deg/sec — a 0/negative rate would make
+	# the arrow keys unable to aim (Aim.keyboard_angle_step early-returns on rate <= 0), so it is > 0.
+	for k in ["throw_button_pop_seconds", "aim_line_width", "keyboard_aim_deg_per_sec"]:
 		if not fd.has(k):
 			errors.append("balance.feel: missing '%s'" % k)
 		elif float(fd.get(k, 0.0)) <= 0.0:
 			errors.append("balance.feel: '%s' %s must be > 0" % [k, str(fd.get(k))])
 	# Non-negative magnitudes (0 = a still line / no recoil — valid, e.g. reduced motion authored low).
-	for k in ["aim_scroll_speed", "recoil_px"]:
+	# aim_march_px is the dash-shader march speed (0 = a static dash, valid); aim_dash_px/aim_gap_px
+	# are the dash + gap lengths (each >= 0), but their SUM (the dash period) MUST be > 0 or the
+	# marching-dash shader divides by a zero period.
+	for k in ["aim_scroll_speed", "recoil_px", "aim_march_px", "aim_dash_px", "aim_gap_px"]:
 		if not fd.has(k):
 			errors.append("balance.feel: missing '%s'" % k)
 		elif float(fd.get(k, -1.0)) < 0.0:
 			errors.append("balance.feel: '%s' %s must be >= 0" % [k, str(fd.get(k))])
+	if fd.has("aim_dash_px") and fd.has("aim_gap_px"):
+		var period: float = float(fd.get("aim_dash_px", 0.0)) + float(fd.get("aim_gap_px", 0.0))
+		if period <= 0.0:
+			errors.append("balance.feel: 'aim_dash_px' + 'aim_gap_px' (dash period) %s must be > 0" % str(period))
 	# Muzzle flash burst: a one-shot needs at least one particle to read.
 	if not fd.has("muzzle_flash_particles"):
 		errors.append("balance.feel: missing 'muzzle_flash_particles'")
 	elif int(fd.get("muzzle_flash_particles", 0)) < 1:
 		errors.append("balance.feel: 'muzzle_flash_particles' %s must be >= 1" % str(fd.get("muzzle_flash_particles")))
+
+## The data-driven elevator hold-to-move RAMP (balance.elevator). Holding an elevator button/key
+## moves the platform CONTINUOUSLY, ramping from a slow start to a capped max (ElevatorRamp). All
+## three constants are REQUIRED + range-checked so a typo'd key that silently reads 0 can't disable
+## the hold (a 0 max/start would never move; a negative accel is meaningless): `start_rows_per_sec`
+## > 0 (a fresh hold must move), `accel_rows_per_sec2` >= 0 (0 = a constant slow glide, still valid),
+## `max_rows_per_sec` >= `start_rows_per_sec` (the cap can't sit below the start). Tunables are data.
+static func _check_elevator(b: Dictionary, errors: Array) -> void:
+	if not b.has("elevator"):
+		errors.append("balance: missing 'elevator' hold-to-move ramp table")
+		return
+	var v: Variant = b.get("elevator")
+	if not (v is Dictionary):
+		errors.append("balance: 'elevator' must be a JSON object")
+		return
+	var ed: Dictionary = v
+	# start_rows_per_sec: the slow initial hold speed — strictly > 0 so a fresh hold actually moves.
+	if not ed.has("start_rows_per_sec"):
+		errors.append("balance.elevator: missing 'start_rows_per_sec'")
+	elif float(ed.get("start_rows_per_sec", 0.0)) <= 0.0:
+		errors.append("balance.elevator: 'start_rows_per_sec' %s must be > 0" % str(ed.get("start_rows_per_sec")))
+	# accel_rows_per_sec2: how fast the held speed ramps — >= 0 (0 = a constant slow glide, valid).
+	if not ed.has("accel_rows_per_sec2"):
+		errors.append("balance.elevator: missing 'accel_rows_per_sec2'")
+	elif float(ed.get("accel_rows_per_sec2", -1.0)) < 0.0:
+		errors.append("balance.elevator: 'accel_rows_per_sec2' %s must be >= 0" % str(ed.get("accel_rows_per_sec2")))
+	# max_rows_per_sec: the capped top speed — must be >= the start (the cap can't be below the start).
+	if not ed.has("max_rows_per_sec"):
+		errors.append("balance.elevator: missing 'max_rows_per_sec'")
+	else:
+		var mx: float = float(ed.get("max_rows_per_sec", 0.0))
+		var st: float = float(ed.get("start_rows_per_sec", 0.0))
+		if mx < st:
+			errors.append("balance.elevator: 'max_rows_per_sec' %s must be >= 'start_rows_per_sec' %s" % [str(mx), str(st)])
 
 ## The data-driven SFX table (audio.json, v0.5 arcade audio pass). Every placeholder cue's
 ## synthesis params (freq/dur/noise/sweep/pitch_jitter) are /data, not a code literal in audio.gd
@@ -450,6 +543,50 @@ static func _check_audio_event_spec(label: String, spec: Variant, errors: Array)
 		var pj: float = float(sd.get("pitch_jitter", -1.0))
 		if pj < 0.0 or pj > 0.5:
 			errors.append("%s: 'pitch_jitter' %s must be in [0,0.5]" % [label, str(pj)])
+
+## Logging config (UNIT INFRA). The diagnostics threshold + file tunables are DATA (data/logging.json),
+## consumed by the Logger autoload — never code literals (mirrors the _check_audio / _check_settings
+## rules). Logger keeps a hardcoded FALLBACK_CONFIG so a missing table can't disable diagnostics, but
+## the SHIPPED table must satisfy this gate. Rules: `min_level` is one of the level tags (DEBUG/INFO/
+## WARN/ERROR/OFF); `log_file` is a non-empty user:// path (kept under user:// so it is sandbox-/web-
+## safe and never escapes the writable dir); `max_file_kb` > 0 (the rotation cap); `mirror_to_console`
+## is a bool.
+const LOG_LEVELS := ["DEBUG", "INFO", "WARN", "ERROR", "OFF"]
+
+static func _check_logging(logging: Variant, errors: Array) -> void:
+	if logging == null:
+		errors.append("missing table: logging.json (UNIT INFRA diagnostics config)")
+		return
+	if not (logging is Dictionary):
+		errors.append("logging.json must be a JSON object")
+		return
+	var ld: Dictionary = logging
+	# min_level: must be one of the canonical level tags (so the threshold maps to a real level).
+	if not ld.has("min_level"):
+		errors.append("logging: missing 'min_level'")
+	else:
+		var lvl: String = str(ld.get("min_level", "")).to_upper()
+		if not LOG_LEVELS.has(lvl):
+			errors.append("logging: 'min_level' '%s' must be one of %s" % [str(ld.get("min_level")), str(LOG_LEVELS)])
+	# log_file: a non-empty user:// path (sandbox-/web-safe; never writes outside the writable dir).
+	if not ld.has("log_file"):
+		errors.append("logging: missing 'log_file'")
+	else:
+		var path: String = str(ld.get("log_file", ""))
+		if path.is_empty():
+			errors.append("logging: 'log_file' must be non-empty")
+		elif not path.begins_with("user://"):
+			errors.append("logging: 'log_file' '%s' must be a 'user://' path (sandbox-safe)" % path)
+	# max_file_kb: the rotation cap, strictly positive (0 would rotate every write).
+	if not ld.has("max_file_kb"):
+		errors.append("logging: missing 'max_file_kb'")
+	elif int(ld.get("max_file_kb", 0)) <= 0:
+		errors.append("logging: 'max_file_kb' %s must be > 0" % str(ld.get("max_file_kb")))
+	# mirror_to_console: a bool (typed so a stray string/int is caught).
+	if not ld.has("mirror_to_console"):
+		errors.append("logging: missing 'mirror_to_console'")
+	elif not (ld.get("mirror_to_console") is bool):
+		errors.append("logging: 'mirror_to_console' must be a boolean")
 
 static func _check_blocks(blocks: Dictionary, errors: Array) -> void:
 	if blocks.is_empty():
@@ -615,85 +752,135 @@ static func _lin(ch: float) -> float:
 		return ch / 12.92
 	return pow((ch + 0.055) / 1.055, 2.4)
 
-static func _check_bands(bands: Variant, blocks: Dictionary, errors: Array) -> void:
-	if bands == null:
+## UNIT MAPGEN (infinite descent): depth_bands.json is now the CONTINUOUS depth-weight CURVE
+## descriptor — an OBJECT with two anchor weight tables (surface_weights, cap_weights), a
+## cap_depth_cells, a curve shape, and the HUD sample bucket — NOT the old discrete band array.
+## Enforce: both anchors non-empty objects; every weighted id is a known DIGGABLE block with a
+## weight > 0; cap_depth_cells > surface_depth_cells; curve ∈ {linear, smoothstep};
+## hud_sample_band_cells > 0. (Replaces _check_bands.)
+const GEN_CURVES := ["linear", "smoothstep"]
+
+static func _check_depth_curve(curve: Variant, blocks: Dictionary, errors: Array) -> void:
+	if curve == null:
 		errors.append("missing table: depth_bands.json")
 		return
-	if not (bands is Array) or (bands as Array).is_empty():
-		errors.append("depth_bands.json must be a non-empty array")
+	if not (curve is Dictionary):
+		errors.append("depth_bands.json must be a JSON object (the continuous depth-weight curve; UNIT MAPGEN)")
 		return
-	for band in bands:
-		if not (band is Dictionary):
-			errors.append("depth_bands: each band must be an object")
-			continue
-		var bid: String = str(band.get("id", "?"))
-		if int(band.get("min_depth_cells", 0)) >= int(band.get("max_depth_cells", 0)):
-			errors.append("depth_bands[%s]: min_depth_cells must be < max_depth_cells" % bid)
-		var weights: Variant = band.get("block_weights")
-		if not (weights is Dictionary) or (weights as Dictionary).is_empty():
-			errors.append("depth_bands[%s]: block_weights must be a non-empty object" % bid)
-			continue
-		for block_id in (weights as Dictionary).keys():
-			if not blocks.has(block_id):
-				errors.append("depth_bands[%s]: references unknown block '%s'" % [bid, block_id])
-			elif not blocks.get(block_id, {}).get("diggable", false):
-				errors.append("depth_bands[%s]: block '%s' is not diggable" % [bid, block_id])
-			if float(weights[block_id]) <= 0.0:
-				errors.append("depth_bands[%s]: weight for '%s' must be > 0" % [bid, block_id])
+	var c: Dictionary = curve
+	var surface_depth: int = int(c.get("surface_depth_cells", 0))
+	if not c.has("cap_depth_cells"):
+		errors.append("depth_bands: missing 'cap_depth_cells'")
+	elif int(c.get("cap_depth_cells", 0)) <= surface_depth:
+		errors.append("depth_bands: 'cap_depth_cells' (%d) must be > 'surface_depth_cells' (%d)" % [int(c.get("cap_depth_cells", 0)), surface_depth])
+	if not c.has("curve"):
+		errors.append("depth_bands: missing 'curve'")
+	elif not GEN_CURVES.has(str(c.get("curve", ""))):
+		errors.append("depth_bands: 'curve' '%s' must be one of %s" % [str(c.get("curve")), str(GEN_CURVES)])
+	if not c.has("hud_sample_band_cells"):
+		errors.append("depth_bands: missing 'hud_sample_band_cells'")
+	elif int(c.get("hud_sample_band_cells", 0)) <= 0:
+		errors.append("depth_bands: 'hud_sample_band_cells' must be > 0")
+	_check_anchor_weights("surface_weights", c.get("surface_weights"), blocks, errors)
+	_check_anchor_weights("cap_weights", c.get("cap_weights"), blocks, errors)
 
-## AC-5.5.2 (depth reward): with increasing depth, the EXPECTED ore value per cell and the
-## RARE-GEM (highest-value block type) probability SHALL both strictly rise across adjacent
-## depth bands. This is the machine-checked replacement for the old "floor (minimum value)
-## rises" clause (v0.4.1): common value-0 filler rock is allowed at any depth, so the reward
-## signal is expected value + gem chance, not a per-cell minimum. Enforcing it at the gate means
-## a future /data edit that makes a deeper band no more rewarding fails the build, not the player.
-static func _check_band_depth_reward(bands: Variant, blocks: Dictionary, errors: Array) -> void:
-	if not (bands is Array) or (bands as Array).size() < 2:
-		return  # 0/1 band → no adjacency to compare (band shape errors are reported elsewhere)
-	# The "gem" is the single highest ore value present in the registry; gem probability in a
-	# band is the summed weight of every block at that max value (handles ties), over total weight.
+## One anchor weight table: a non-empty object whose keys are known diggable blocks, each
+## with a weight > 0. (A block may be absent from one anchor — that means weight 0 there.)
+static func _check_anchor_weights(label: String, weights: Variant, blocks: Dictionary, errors: Array) -> void:
+	if not (weights is Dictionary) or (weights as Dictionary).is_empty():
+		errors.append("depth_bands.%s: must be a non-empty object" % label)
+		return
+	for block_id in (weights as Dictionary).keys():
+		if not blocks.has(block_id):
+			errors.append("depth_bands.%s: references unknown block '%s'" % [label, block_id])
+		elif not blocks.get(block_id, {}).get("diggable", false):
+			errors.append("depth_bands.%s: block '%s' is not diggable" % [label, block_id])
+		if float((weights as Dictionary)[block_id]) <= 0.0:
+			errors.append("depth_bands.%s: weight for '%s' must be > 0" % [label, block_id])
+
+## AC-5.5.2 (depth reward, now over the continuous curve): with increasing depth, the EXPECTED
+## ore value per cell and the RARE-GEM (highest-value block type) probability SHALL both strictly
+## rise toward the cap, then FREEZE at/below cap_depth_cells (bounded richness). We sample the
+## continuous lerp at y ∈ {0, cap/4, cap/2, 3cap/4, cap} and assert strict increase across the
+## samples, plus that a sample PAST the cap equals the cap sample (the boundedness guard). A /data
+## edit that flattens or inverts the ramp — or makes cap_weights no richer than surface_weights —
+## fails the build, not the player. This is the machine-checked AC-5.5.2 invariant over the curve.
+static func _check_depth_reward_monotone(curve: Variant, blocks: Dictionary, errors: Array) -> void:
+	if not (curve is Dictionary):
+		return  # shape errors already reported by _check_depth_curve
+	var c: Dictionary = curve
+	var sw: Variant = c.get("surface_weights")
+	var cw: Variant = c.get("cap_weights")
+	if not (sw is Dictionary) or not (cw is Dictionary):
+		return  # anchor-shape errors already reported
+	var surface_depth: int = int(c.get("surface_depth_cells", 0))
+	var cap: int = int(c.get("cap_depth_cells", 0))
+	if cap <= surface_depth:
+		return  # cap-depth error already reported
+	var smoothstep: bool = str(c.get("curve", "linear")) == "smoothstep"
+	# The "gem" is the single highest ore value present in the registry; gem probability at a
+	# depth is the summed weight of every block at that max value (handles ties), over total.
 	var gem_value: int = -1
 	for id in blocks.keys():
 		if blocks[id] is Dictionary:
 			gem_value = maxi(gem_value, _ore_value(blocks[id]))
-	# Build a depth-sorted list of (min_depth, ev, gem_prob, id); skip malformed bands.
+	var span: int = cap - surface_depth
+	var sample_depths: Array = [
+		surface_depth,
+		surface_depth + span / 4,
+		surface_depth + span / 2,
+		surface_depth + (3 * span) / 4,
+		cap,
+		cap + maxi(1, span),  # past the cap — must equal the cap sample (boundedness)
+	]
 	var rows: Array = []
-	for band in (bands as Array):
-		if not (band is Dictionary):
-			continue
-		var weights: Variant = band.get("block_weights")
-		if not (weights is Dictionary) or (weights as Dictionary).is_empty():
-			continue  # band-shape errors already reported by _check_bands
-		var total: float = 0.0
-		var value_sum: float = 0.0
-		var gem_weight: float = 0.0
-		for bid in (weights as Dictionary).keys():
-			if not blocks.has(bid) or not (blocks[bid] is Dictionary):
-				continue  # unknown-block errors already reported by _check_bands
-			var w: float = float((weights as Dictionary)[bid])
-			if w <= 0.0:
-				continue
-			total += w
-			var v: int = _ore_value(blocks[bid])
-			value_sum += w * float(v)
-			if gem_value > 0 and v == gem_value:
-				gem_weight += w
-		if total <= 0.0:
-			continue
-		rows.append({
-			"id": str(band.get("id", "?")),
-			"min": int(band.get("min_depth_cells", 0)),
-			"ev": value_sum / total,
-			"gem": gem_weight / total,
-		})
-	rows.sort_custom(func(a, b): return a["min"] < b["min"])
-	for i in range(1, rows.size()):
+	for y in sample_depths:
+		rows.append(_curve_reward_at(sw, cw, blocks, surface_depth, cap, smoothstep, gem_value, int(y)))
+	# Strict rise up to and including the cap (indices 0..4); index 5 is the past-cap freeze check.
+	for i in range(1, 5):
 		var lo: Dictionary = rows[i - 1]
 		var hi: Dictionary = rows[i]
 		if hi["ev"] <= lo["ev"]:
-			errors.append("depth_bands: expected ore value per cell must strictly rise with depth — band '%s' EV %.3f <= shallower band '%s' EV %.3f (SPEC AC-5.5.2)" % [hi["id"], hi["ev"], lo["id"], lo["ev"]])
+			errors.append("depth_bands: expected ore value per cell must strictly rise with depth — at y=%d EV %.3f <= shallower y=%d EV %.3f (SPEC AC-5.5.2)" % [hi["y"], hi["ev"], lo["y"], lo["ev"]])
 		if hi["gem"] <= lo["gem"]:
-			errors.append("depth_bands: rare-gem probability must strictly rise with depth — band '%s' gem-prob %.3f <= shallower band '%s' gem-prob %.3f (SPEC AC-5.5.2)" % [hi["id"], hi["gem"], lo["id"], lo["gem"]])
+			errors.append("depth_bands: rare-gem probability must strictly rise with depth — at y=%d gem-prob %.3f <= shallower y=%d gem-prob %.3f (SPEC AC-5.5.2)" % [hi["y"], hi["gem"], lo["y"], lo["gem"]])
+	# Boundedness: the past-cap sample must equal the cap sample (weights are clamped at the cap).
+	var at_cap: Dictionary = rows[4]
+	var past_cap: Dictionary = rows[5]
+	if absf(float(past_cap["ev"]) - float(at_cap["ev"])) > 0.0001 or absf(float(past_cap["gem"]) - float(at_cap["gem"])) > 0.0001:
+		errors.append("depth_bands: reward must FREEZE at/below cap_depth_cells — past-cap EV/gem (%.3f/%.3f) differs from cap EV/gem (%.3f/%.3f); the curve is not clamped at the cap (SPEC AC-5.5.2)" % [past_cap["ev"], past_cap["gem"], at_cap["ev"], at_cap["gem"]])
+
+## EV + gem-probability of the interpolated weight table at depth `y`. Pure mirror of
+## Registry.depth_weights_at (kept local so the data gate is self-contained).
+static func _curve_reward_at(sw: Variant, cw: Variant, blocks: Dictionary, surface_depth: int, cap: int, smoothstep: bool, gem_value: int, y: int) -> Dictionary:
+	var t: float = clampf(float(y - surface_depth) / float(cap - surface_depth), 0.0, 1.0)
+	var s: float = (t * t * (3.0 - 2.0 * t)) if smoothstep else t
+	var ids: Dictionary = {}
+	for k in (sw as Dictionary).keys():
+		ids[k] = true
+	for k in (cw as Dictionary).keys():
+		ids[k] = true
+	var total: float = 0.0
+	var value_sum: float = 0.0
+	var gem_weight: float = 0.0
+	for id in ids.keys():
+		var a: float = float((sw as Dictionary).get(id, 0.0))
+		var b: float = float((cw as Dictionary).get(id, 0.0))
+		var w: float = a + s * (b - a)
+		if w <= 0.0:
+			continue
+		if not blocks.has(id) or not (blocks[id] is Dictionary):
+			continue  # unknown-block errors reported by _check_depth_curve
+		total += w
+		var v: int = _ore_value(blocks[id])
+		value_sum += w * float(v)
+		if gem_value > 0 and v == gem_value:
+			gem_weight += w
+	return {
+		"y": y,
+		"ev": value_sum / total if total > 0.0 else 0.0,
+		"gem": gem_weight / total if total > 0.0 else 0.0,
+	}
 
 ## Ore value of a block dict (0 if no ore). Local helper so the depth-reward check does not
 ## need the full Registry-by-id indirection (blocks here is the raw block_types table).
@@ -761,6 +948,39 @@ static func _check_explosives(explosives: Dictionary, balance: Dictionary, error
 			errors.append("explosives[%s]: tier must be >= 1" % id)
 		if ex.has("rarity") and str(ex.get("rarity", "")).is_empty():
 			errors.append("explosives[%s]: rarity must be a non-empty label" % id)
+	_check_charge_motion_gate(explosives, balance, errors)
+
+## The on_rest charge motion/airtime gate (charge.gd: the "sticky bomb explodes instantly" fix).
+## An on_rest charge may only resolve via the sleeping/settled path AFTER it has actually moved —
+## gated by charge_min_airtime_seconds + charge_min_travel_px (balance.json). Both are REQUIRED
+## tunables (balance is data, never a code literal). The airtime must be strictly > 0 (a 0 gate
+## re-opens the frame-0 instant-pop bug) AND strictly less than the smallest sticky fuse_seconds, so
+## the gate can never delay a real STUCK sticky's stick-fuse (the freeze path arms its own fuse and
+## the gate is irrelevant once frozen, but keeping the airtime below every stick fuse documents that
+## the gate is a sub-frame motion guard, not a detonation delay). The travel floor is >= 0 (0 =
+## airtime-only gating, valid).
+static func _check_charge_motion_gate(explosives: Dictionary, balance: Dictionary, errors: Array) -> void:
+	if not balance.has("charge_min_airtime_seconds"):
+		errors.append("balance: missing 'charge_min_airtime_seconds' (on_rest charge motion gate)")
+	else:
+		var airtime: float = float(balance.get("charge_min_airtime_seconds", 0.0))
+		if airtime <= 0.0:
+			errors.append("balance: 'charge_min_airtime_seconds' %s must be > 0 (a 0 gate re-opens the frame-0 instant-detonation bug)" % str(airtime))
+		else:
+			# Must sit below the smallest sticky on_rest fuse so it never delays a real stick-fuse.
+			var min_sticky_fuse: float = INF
+			for id in explosives.keys():
+				var ex: Variant = explosives[id]
+				if not (ex is Dictionary):
+					continue
+				if bool((ex as Dictionary).get("sticky", false)) and str((ex as Dictionary).get("detonation_mode", "")) == "on_rest":
+					min_sticky_fuse = minf(min_sticky_fuse, maxf(0.0, float((ex as Dictionary).get("fuse_seconds", 0.0))))
+			if min_sticky_fuse != INF and airtime >= min_sticky_fuse:
+				errors.append("balance: 'charge_min_airtime_seconds' %s must be < the smallest sticky fuse_seconds %s (the motion gate must never delay a real stick-fuse)" % [str(airtime), str(min_sticky_fuse)])
+	if not balance.has("charge_min_travel_px"):
+		errors.append("balance: missing 'charge_min_travel_px' (on_rest charge motion gate)")
+	elif float(balance.get("charge_min_travel_px", -1.0)) < 0.0:
+		errors.append("balance: 'charge_min_travel_px' %s must be >= 0 (on_rest charge motion gate)" % str(balance.get("charge_min_travel_px")))
 
 static func _check_packs(packs: Dictionary, explosives: Dictionary, errors: Array) -> void:
 	if packs.is_empty():
@@ -805,7 +1025,7 @@ static func _check_packs(packs: Dictionary, explosives: Dictionary, errors: Arra
 ## v0.4: exactly one explosive is the flagged FREE unlimited charge, and it must be
 ## able to break the shallowest floor beneath the platform — no /data config may
 ## produce a stall (AC-5.4.3, AC-5.5.5, AC-5.4.6, AC-5.12.1).
-static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, bands: Variant, balance: Dictionary, errors: Array) -> void:
+static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, curve: Variant, balance: Dictionary, errors: Array) -> void:
 	if explosives.is_empty():
 		return  # already reported by _check_explosives
 	var free_ids: Array = []
@@ -844,9 +1064,9 @@ static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, bands
 	# guarantees progress. We verify this against the WORST-CASE *scaled* floor HP
 	# (AC-5.5.5: "against each mine's floor-HP scaling"), i.e. the deepest cell in the
 	# hardest mine, where HP = base_hp x depth_mult x mine_hardness_mult is largest.
-	var floor_hp: int = _max_scaled_floor_hp(bands, blocks, balance)
+	var floor_hp: int = _max_scaled_floor_hp(curve, blocks, balance)
 	if floor_hp < 0:
-		return  # no diggable floor — reported by band checks
+		return  # no diggable floor — reported by curve checks
 	# Per-cell centre damage the free charge deals (integer-floored, as the grid is).
 	var intensity: float = float(free.get("blast_intensity", 0))
 	var falloff: Variant = free.get("blast_falloff")
@@ -862,16 +1082,17 @@ static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, bands
 	if centre_damage <= 0:
 		errors.append("explosives[%s]: free charge worst-case damage is 0 (intensity %s x falloff[0] %s x (1-fuzz %s)) — a throw can deal 0 against the scaled floor (worst-case HP %d); would stall (SPEC AC-5.5.5 / AC-5.4.6)" % [free_ids[0], str(intensity), str(f0), str(fuzz_pct), floor_hp])
 
-## Worst-case scaled floor HP across the configured depth/mine range, or -1 if no
-## diggable floor exists. The deepest diggable floor cell sits at the deepest band's
-## max depth in the hardest mine; HP = base_hp x depth_mult x mine_hardness_mult
-## (AC-5.2.1). We take the LOWEST-HP diggable block in that band (the easiest floor
-## the player could be standing on) so the no-stall bound is the worst plausible case.
-static func _max_scaled_floor_hp(bands: Variant, blocks: Dictionary, balance: Dictionary) -> int:
-	var deepest: Dictionary = _deepest_band(bands)
-	if deepest.is_empty():
+## Worst-case scaled floor HP in the infinite shaft, or -1 if no diggable floor exists.
+## The hardest floor sits at/below the cap depth (where the rich cap_weights apply AND the
+## depth HP multiplier has hit its ceiling max_depth_hp_mult) in the hardest mine; HP =
+## base_hp x min(depth_mult, max_depth_hp_mult) x mine_hardness_mult (AC-5.2.1, UNIT MAPGEN
+## HP cap). We take the LOWEST-HP diggable block present in cap_weights (the easiest floor the
+## player could be standing on at the richest depth) so the no-stall bound is the worst
+## plausible case. The HP cap is what keeps this FINITE in an unbounded shaft.
+static func _max_scaled_floor_hp(curve: Variant, blocks: Dictionary, balance: Dictionary) -> int:
+	if not (curve is Dictionary):
 		return -1
-	var weights: Variant = deepest.get("block_weights")
+	var weights: Variant = (curve as Dictionary).get("cap_weights")
 	if not (weights is Dictionary):
 		return -1
 	var min_base_hp: int = -1
@@ -886,26 +1107,12 @@ static func _max_scaled_floor_hp(bands: Variant, blocks: Dictionary, balance: Di
 			min_base_hp = hp
 	if min_base_hp < 0:
 		return -1
-	# Deepest cell = max_depth_cells - 1 (the last in-range cell of the deepest band).
-	var max_depth_cell: int = max(0, int(deepest.get("max_depth_cells", 1)) - 1)
-	var depth_mult: float = 1.0 + float(max_depth_cell) * float(balance.get("depth_hp_mult_per_cell", 0.0))
+	# depth_mult at/below the cap = the ceiling max_depth_hp_mult (HP stops scaling there).
+	var depth_mult: float = float(balance.get("max_depth_hp_mult", 1.0))
+	if depth_mult <= 0.0:
+		depth_mult = 1.0
 	var mine_mult: float = float(balance.get("mine_hardness_mult_max", 1.0))
 	return int(round(float(min_base_hp) * depth_mult * mine_mult))
-
-## Returns the band with the greatest max_depth_cells (the deepest), or {}.
-static func _deepest_band(bands: Variant) -> Dictionary:
-	if not (bands is Array):
-		return {}
-	var best: Dictionary = {}
-	var best_max: int = -1
-	for band in bands:
-		if not (band is Dictionary):
-			continue
-		var m: int = int(band.get("max_depth_cells", 0))
-		if m > best_max:
-			best_max = m
-			best = band
-	return best
 
 ## U2 (v0.4): FastNoiseLite generation parameters. Coherent gen needs a positive
 ## frequency, >=1 octave, and a positive normalization std (the normal-CDF transform
@@ -925,11 +1132,12 @@ static func _check_generation(gen: Variant, errors: Array) -> void:
 	if not g.has("noise_std") or float(g.get("noise_std", 0.0)) <= 0.0:
 		errors.append("generation: 'noise_std' must be > 0 (normal-CDF normalization)")
 
-## U2 (v0.4): relic placement config (AC-5.6.1). The relic is the dig objective,
-## placed at/below a configured minimum depth as a pure fn of (mine_seed). The
-## min depth + span must be sane and must fall WITHIN a diggable depth band so the
-## relic cell is actually reachable/breakable.
-static func _check_relics(relics: Variant, bands: Variant, balance: Dictionary, errors: Array) -> void:
+## Relic placement config (AC-5.6.1, UNIT MAPGEN infinite descent). The relic is the dig
+## objective + terminator: a single seed-pinned cell in a deterministic DEEP window, confined
+## to a center column band. The depth window [min_depth, min_depth+span) must sit BELOW the sky
+## (so it's in generated solid terrain, reachable down the shaft) — there is no mine floor to
+## clamp it to in the infinite shaft. The column band is checked by _check_relic_band.
+static func _check_relics(relics: Variant, _curve: Variant, balance: Dictionary, errors: Array) -> void:
 	if relics == null:
 		errors.append("missing table: relics.json")
 		return
@@ -938,19 +1146,60 @@ static func _check_relics(relics: Variant, bands: Variant, balance: Dictionary, 
 		return
 	var r: Dictionary = relics
 	var min_depth: int = int(r.get("min_depth_cells", -1))
-	if not r.has("min_depth_cells") or min_depth < 0:
-		errors.append("relics: 'min_depth_cells' must be present and >= 0")
+	if not r.has("min_depth_cells") or min_depth <= 0:
+		errors.append("relics: 'min_depth_cells' must be present and > 0")
 	var span: int = int(r.get("depth_span_cells", 0))
 	if not r.has("depth_span_cells") or span < 1:
 		errors.append("relics: 'depth_span_cells' must be present and >= 1")
 	if not r.has("prestige_value") or int(r.get("prestige_value", 0)) != 1:
 		errors.append("relics: 'prestige_value' must be exactly 1 (one prestige point per relic, SPEC v0.5 AC-5.6.6)")
-	# The relic's possible depth range [min_depth, min_depth+span) must lie within the
-	# generated shaft (a diggable band), else the relic could never be generated/broken.
-	if min_depth >= 0 and span >= 1 and bands is Array:
-		var deepest_max: int = int(_deepest_band(bands).get("max_depth_cells", 0))
-		if min_depth + span > deepest_max:
-			errors.append("relics: relic depth range [%d,%d) exceeds the deepest band max_depth_cells %d" % [min_depth, min_depth + span, deepest_max])
+	# The relic depth window must sit below the sky band (in generated solid terrain), so the
+	# relic cell is actually a breakable block and not floating in the air column.
+	var sky: int = int(balance.get("sky_band_cells", 0))
+	if min_depth > 0 and min_depth <= sky:
+		errors.append("relics: 'min_depth_cells' (%d) must be deeper than the sky band (%d) so the relic sits in solid terrain" % [min_depth, sky])
+	# For a BOUNDED mine (mine_height_cells > 0) the relic window must still fit inside it.
+	var mine_h: int = int(balance.get("mine_height_cells", 0))
+	if mine_h > 0 and min_depth > 0 and span >= 1 and min_depth + span > mine_h:
+		errors.append("relics: relic depth range [%d,%d) exceeds the bounded mine height %d" % [min_depth, min_depth + span, mine_h])
+	_check_relic_band(r, balance, errors)
+
+## AC-5.6.1 (relic center band): the relic column is confined to |relic_col - center| <=
+## relic_band_half_cells (a 13-wide band at 6). The band must be present, >= 0, and FIT the
+## configured mine width (a band wider than the mine is meaningless). Keeps the relic on/near
+## the descent corridor in the infinite shaft.
+static func _check_relic_band(r: Dictionary, balance: Dictionary, errors: Array) -> void:
+	if not r.has("relic_band_half_cells"):
+		errors.append("relics: missing 'relic_band_half_cells' (AC-5.6.1 center band)")
+		return
+	var half: int = int(r.get("relic_band_half_cells", -1))
+	if half < 0:
+		errors.append("relics: 'relic_band_half_cells' must be >= 0 (AC-5.6.1)")
+		return
+	var width: int = int(balance.get("mine_width_cells", 0))
+	if width > 0 and (2 * half + 1) > width:
+		errors.append("relics: relic band width %d (2*%d+1) exceeds mine width %d (AC-5.6.1)" % [2 * half + 1, half, width])
+
+## AC-5.5.x (pack affordability): the player can always afford to PARTICIPATE in the shop loop —
+## the cheapest pack's price must be <= starting_money. Otherwise a fresh dig can't buy any pack
+## even though the shop is presented (the free charge still works, so it's not a stall, but the
+## economy loop would be unreachable on dig 1).
+static func _check_pack_affordability(packs: Dictionary, balance: Dictionary, errors: Array) -> void:
+	if packs.is_empty():
+		return  # emptiness reported by _check_packs
+	var cheapest: int = -1
+	for id in packs.keys():
+		var p: Variant = packs[id]
+		if not (p is Dictionary):
+			continue
+		var price: int = int((p as Dictionary).get("price", 0))
+		if cheapest < 0 or price < cheapest:
+			cheapest = price
+	if cheapest < 0:
+		return
+	var starting: int = int(balance.get("starting_money", 0))
+	if cheapest > starting:
+		errors.append("packs: cheapest pack price %d exceeds starting_money %d — the player can't afford to participate in the shop loop on dig 1 (UNIT MAPGEN economy)" % [cheapest, starting])
 
 ## U9 (v0.4): minimal prestige upgrades (AC-5.6.4 / power growth). Each upgrade must
 ## declare a positive prestige cost, a known effect, a positive magnitude, and a
@@ -990,3 +1239,85 @@ static func _check_prestige(prestige: Variant, errors: Array) -> void:
 			errors.append("prestige[%s]: max_level must be > 0" % id)
 		if up.has("effect") and not known_effects.has(effect):
 			errors.append("prestige[%s]: unknown effect '%s' (known: %s)" % [id, effect, str(known_effects)])
+
+
+## Per-dig MONEY upgrades (Shaft Engineering, etc.): bought with in-dig money via the shop,
+## reset each dig (no persistence). Each must declare a money price > 0, a known effect, a
+## negative reduction magnitude, and a positive max_level. The table may be empty (the slice
+## can ship with zero money upgrades) but if present every entry must be well-formed.
+static func _check_upgrades(upgrades: Variant, balance: Variant, errors: Array) -> void:
+	if upgrades == null:
+		return  # optional table
+	if not (upgrades is Dictionary):
+		errors.append("upgrades.json must be a JSON object")
+		return
+	var known_effects := ["shaft_width_reduction"]
+	for id in (upgrades as Dictionary).keys():
+		var up: Variant = (upgrades as Dictionary)[id]
+		if not (up is Dictionary):
+			errors.append("upgrades[%s]: must be an object" % id)
+			continue
+		for k in ["display_name", "effect", "magnitude", "price", "max_level"]:
+			if not up.has(k):
+				errors.append("upgrades[%s]: missing '%s'" % [id, k])
+		if int(up.get("price", 0)) <= 0:
+			errors.append("upgrades[%s]: price must be > 0 (a money cost)" % id)
+		if int(up.get("max_level", 0)) <= 0:
+			errors.append("upgrades[%s]: max_level must be > 0" % id)
+		var effect: String = str(up.get("effect", ""))
+		var mag: float = float(up.get("magnitude", 0.0))
+		if not known_effects.has(effect):
+			errors.append("upgrades[%s]: unknown effect '%s' (known: %s)" % [id, effect, str(known_effects)])
+		if effect == "shaft_width_reduction":
+			if mag >= 0.0:
+				errors.append("upgrades[%s]: shaft_width_reduction magnitude must be < 0 (a reduction)" % id)
+			if balance is Dictionary:
+				var base_w: int = int((balance as Dictionary).get("shaft_width_cells", 0))
+				var plat_w: int = int((balance as Dictionary).get("platform_width_cells", 1))
+				var max_reduction: int = int(round(absf(mag))) * int(up.get("max_level", 0))
+				if base_w - max_reduction < plat_w:
+					errors.append("upgrades[%s]: reduction would narrow the shaft (%d) below the platform width (%d)" % [id, base_w - max_reduction, plat_w])
+
+
+## Mines (surface + deeper money-gated mines). Optional table; if present it must declare at
+## least one FREE (access_cost 0) starting mine, and every mine must have a positive hardness
+## and ore multiplier (hardness bounded by the same scaling cap the HP formula honors), a
+## non-negative access cost, and a valid tint hex. Keeps the no-lose, money-per-dig model sane.
+static func _check_mines(mines: Variant, balance: Variant, errors: Array) -> void:
+	if mines == null:
+		return  # optional table
+	if not (mines is Dictionary):
+		errors.append("mines.json must be a JSON object")
+		return
+	var dict: Dictionary = mines
+	if dict.is_empty():
+		errors.append("mines: registry is empty (need at least one starting mine)")
+		return
+	var hardness_cap: float = 99.0
+	if balance is Dictionary:
+		hardness_cap = float((balance as Dictionary).get("mine_hardness_mult_max", 99.0))
+	var free_count: int = 0
+	for id in dict.keys():
+		var m: Variant = dict[id]
+		if not (m is Dictionary):
+			errors.append("mines[%s]: must be an object" % id)
+			continue
+		for k in ["display_name", "access_cost", "hardness_mult", "ore_value_mult", "tile_tint"]:
+			if not (m as Dictionary).has(k):
+				errors.append("mines[%s]: missing '%s'" % [id, k])
+		var cost: int = int((m as Dictionary).get("access_cost", 0))
+		if cost < 0:
+			errors.append("mines[%s]: access_cost must be >= 0" % id)
+		if cost == 0:
+			free_count += 1
+		if float((m as Dictionary).get("hardness_mult", 0.0)) <= 0.0:
+			errors.append("mines[%s]: hardness_mult must be > 0" % id)
+		if float((m as Dictionary).get("hardness_mult", 0.0)) > hardness_cap:
+			errors.append("mines[%s]: hardness_mult (%s) exceeds mine_hardness_mult_max (%s)" % [id, str((m as Dictionary).get("hardness_mult")), str(hardness_cap)])
+		if float((m as Dictionary).get("ore_value_mult", 0.0)) <= 0.0:
+			errors.append("mines[%s]: ore_value_mult must be > 0" % id)
+		var tint: String = str((m as Dictionary).get("tile_tint", ""))
+		if not Color.html_is_valid(tint):
+			errors.append("mines[%s]: tile_tint '%s' is not a valid hex color" % [id, tint])
+	if free_count < 1:
+		errors.append("mines: at least one mine must be free (access_cost 0) as the starting mine")

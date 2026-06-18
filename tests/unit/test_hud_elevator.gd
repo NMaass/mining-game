@@ -15,13 +15,16 @@ func before() -> void:
 ## Build a Hud instance with the ElevatorControls child tree so _ready wires the signals.
 func _make_hud_with_elevator() -> Hud:
 	var hud: Hud = Hud.new()
-	# The real scene uses a VBoxContainer; replicate the minimal structure for unit tests.
-	var box := VBoxContainer.new()
+	# The real scene uses a plain Control container whose two children sit at FIXED slots (not a
+	# reflowing VBoxContainer) — replicate that minimal structure for unit tests.
+	var box := Control.new()
 	box.name = "ElevatorControls"
 	var up := Button.new()
 	up.name = "ElevatorUp"
+	up.custom_minimum_size = Vector2(64, 64)
 	var down := Button.new()
 	down.name = "ElevatorDown"
+	down.custom_minimum_size = Vector2(64, 64)
 	box.add_child(up)
 	box.add_child(down)
 	hud.add_child(box)
@@ -97,3 +100,60 @@ func test_elevator_disable_state_can_be_set() -> void:
 	down.disabled = false
 	assert_bool(up.disabled).is_false()
 	assert_bool(down.disabled).is_false()
+
+
+func test_up_slot_is_above_down_slot() -> void:
+	# FIXED SLOTS: after a layout pass, the up button occupies the UPPER slot (smaller local Y) and
+	# the down button the LOWER slot — they never overlap and never swap.
+	var hud := _make_hud_with_elevator()
+	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), Vector2i(720, 1280))
+	var up_y: float = hud.elevator_up_slot_position().y
+	var down_y: float = hud.elevator_down_slot_position().y
+	assert_float(down_y).override_failure_message(
+		"down slot Y %.1f must be strictly BELOW up slot Y %.1f" % [down_y, up_y]
+	).is_greater(up_y)
+
+
+func test_hiding_up_does_not_move_down() -> void:
+	# THE CORE FIX: hiding the UP button (the direction you can't go) must NOT move the DOWN button —
+	# the down slot is fixed, so toggling up's visibility leaves down exactly where it was.
+	var hud := _make_hud_with_elevator()
+	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), Vector2i(720, 1280))
+	var down_before: Vector2 = hud.elevator_down_slot_position()
+	# Hide up (and re-run the layout the way the controller would after a state change).
+	hud.set_elevator_up_visible(false)
+	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), Vector2i(720, 1280))
+	var down_after: Vector2 = hud.elevator_down_slot_position()
+	assert_vector(down_after).override_failure_message(
+		"hiding the UP button moved the DOWN button (was %s, now %s) — slots are not fixed"
+		% [str(down_before), str(down_after)]
+	).is_equal(down_before)
+
+
+func test_hiding_down_does_not_move_up() -> void:
+	# Symmetric: hiding the DOWN button must NOT move the UP button (up stays in the upper slot).
+	var hud := _make_hud_with_elevator()
+	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), Vector2i(720, 1280))
+	var up_before: Vector2 = hud.elevator_up_slot_position()
+	hud.set_elevator_down_visible(false)
+	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), Vector2i(720, 1280))
+	var up_after: Vector2 = hud.elevator_up_slot_position()
+	assert_vector(up_after).override_failure_message(
+		"hiding the DOWN button moved the UP button (was %s, now %s) — slots are not fixed"
+		% [str(up_before), str(up_after)]
+	).is_equal(up_before)
+
+
+func test_individual_visibility_toggles_are_independent() -> void:
+	# set_elevator_up_visible / set_elevator_down_visible toggle ONLY their own button (no swap, no
+	# coupling) — proving the hide-not-disable behavior is per-button.
+	var hud := _make_hud_with_elevator()
+	var up: Button = hud.get_node("ElevatorControls/ElevatorUp")
+	var down: Button = hud.get_node("ElevatorControls/ElevatorDown")
+	hud.set_elevator_up_visible(false)
+	assert_bool(up.visible).is_false()
+	assert_bool(down.visible).is_true()  # unaffected
+	hud.set_elevator_up_visible(true)
+	hud.set_elevator_down_visible(false)
+	assert_bool(up.visible).is_true()  # unaffected
+	assert_bool(down.visible).is_false()

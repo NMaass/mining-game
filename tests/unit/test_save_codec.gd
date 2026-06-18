@@ -99,10 +99,11 @@ func test_round_trip_preserves_settings() -> void:
 
 func test_migrate_v1_to_v2_adds_default_settings() -> void:
 	# AC-5.11.2 (ordered migration, 2nd real step): a v1 save (prestige only, no settings) migrates
-	# to v2 with a default settings block — and the prestige data is untouched.
+	# FORWARD with a default settings block — and the prestige data is untouched. normalize always
+	# lands at CURRENT_VERSION (the chain runs v1→v2→v3), so the version assertion is CURRENT_VERSION.
 	var v1 := {"version": 1, "prestige": {"points": 9, "levels": {"blast_power": 4}}}
 	var s: Dictionary = Codec.normalize(v1)
-	assert_int(int(s["version"])).is_equal(2)
+	assert_int(int(s["version"])).is_equal(Codec.CURRENT_VERSION)
 	assert_int(int(s["prestige"]["points"])).is_equal(9)        # preserved
 	assert_int(int(s["prestige"]["levels"]["blast_power"])).is_equal(4)
 	assert_bool((s as Dictionary).has("settings")).is_true()    # defaulted in
@@ -127,3 +128,71 @@ func test_settings_sanitized_on_normalize() -> void:
 	assert_float(float(s["settings"]["sfx_volume"])).is_equal(1.0)
 	assert_float(float(s["settings"]["music_volume"])).is_equal(0.0)
 	assert_float(float(s["settings"]["motion_intensity"])).is_equal(1.0)
+
+# ── Controls sub-fields: elevator side + keybinds (D2, AC-5.10.1 persisted via AC-5.11.1/2) ──
+
+func test_default_state_includes_controls_fields() -> void:
+	# AC-5.11.1: the save shape carries the durable controls config (elevator side + keybinds map).
+	var s: Dictionary = Codec.default_state()
+	var settings: Dictionary = s["settings"]
+	assert_bool(settings.has("elevator_side")).is_true()
+	assert_bool(settings.has("keybinds")).is_true()
+	assert_str(str(settings["elevator_side"])).is_equal("right")
+
+func test_migrate_v2_to_v3_adds_controls_fields() -> void:
+	# AC-5.11.2 (ordered migration, 3rd real step / D2): a v2 save (the four accessibility values, no
+	# controls) migrates FORWARD with elevator_side + keybinds defaulted in — accessibility untouched.
+	var v2 := {
+		"version": 2,
+		"prestige": {"points": 2, "levels": {}},
+		"settings": {"sfx_volume": 0.5, "music_volume": 0.5, "motion_intensity": 0.5, "text_scale": 1.2},
+	}
+	var s: Dictionary = Codec.normalize(v2)
+	assert_int(int(s["version"])).is_equal(Codec.CURRENT_VERSION)
+	assert_float(float(s["settings"]["text_scale"])).is_equal_approx(1.2, 0.0001)  # preserved
+	assert_bool((s["settings"] as Dictionary).has("elevator_side")).is_true()      # defaulted in
+	assert_str(str(s["settings"]["elevator_side"])).is_equal("right")
+	assert_bool((s["settings"] as Dictionary).has("keybinds")).is_true()
+
+func test_v0_flat_migrates_all_the_way_to_v3_controls() -> void:
+	# A legacy v0 flat save chains v0→v1→v2→v3: prestige lifted, settings added, controls defaulted.
+	var v0 := {"prestige_points": 3, "prestige_levels": {"blast_power": 1}}
+	var s: Dictionary = Codec.normalize(v0)
+	assert_int(int(s["version"])).is_equal(Codec.CURRENT_VERSION)
+	assert_int(int(s["prestige"]["points"])).is_equal(3)
+	assert_bool((s["settings"] as Dictionary).has("elevator_side")).is_true()
+	assert_bool((s["settings"] as Dictionary).has("keybinds")).is_true()
+
+func test_round_trip_preserves_controls_fields() -> void:
+	# AC-5.11.1: encode → decode round-trips the elevator side + the keybinds map exactly (this is the
+	# exact spot prior settings bugs hid, so the round-trip is asserted on the NEW fields directly).
+	var state := {
+		"version": Codec.CURRENT_VERSION,
+		"prestige": {"points": 1, "levels": {}},
+		"settings": {
+			"sfx_volume": 0.4, "music_volume": 0.2, "motion_intensity": 0.7, "text_scale": 1.4,
+			"elevator_side": "left",
+			"keybinds": {"fire": 65, "elevator_up": 87},
+		},
+	}
+	var d: Dictionary = Codec.decode(Codec.encode(state))
+	assert_str(str(d["settings"]["elevator_side"])).is_equal("left")
+	assert_int(int(d["settings"]["keybinds"]["fire"])).is_equal(65)
+	assert_int(int(d["settings"]["keybinds"]["elevator_up"])).is_equal(87)
+
+func test_controls_sanitized_on_normalize() -> void:
+	# A corrupt-but-parseable controls block can't inject bad state: a bogus side coerces to the
+	# default, an unknown keybind action is dropped, and a non-positive keycode is dropped.
+	var raw := {
+		"version": 3,
+		"prestige": {"points": 0, "levels": {}},
+		"settings": {
+			"elevator_side": "sideways",
+			"keybinds": {"fire": 70, "bogus_action": 99, "aim_left": 0},
+		},
+	}
+	var s: Dictionary = Codec.normalize(raw)
+	assert_str(str(s["settings"]["elevator_side"])).is_equal("right")          # bad side → default
+	assert_int(int(s["settings"]["keybinds"]["fire"])).is_equal(70)            # valid kept
+	assert_bool((s["settings"]["keybinds"] as Dictionary).has("bogus_action")).is_false()  # unknown dropped
+	assert_bool((s["settings"]["keybinds"] as Dictionary).has("aim_left")).is_false()      # kc<=0 dropped

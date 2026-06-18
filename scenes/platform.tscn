@@ -1,28 +1,26 @@
-[gd_scene load_steps=3 format=3 uid="uid://dplatform01"]
+[gd_scene load_steps=4 format=3 uid="uid://dplatform01"]
 
 [ext_resource type="Script" path="res://scripts/systems/platform.gd" id="1_platform"]
-[ext_resource type="Texture2D" path="res://art/runtime/platform.png" id="2_platformtex"]
-
-[sub_resource type="RectangleShape2D" id="RectangleShape2D_platform"]
-size = Vector2(144, 8)
+[ext_resource type="Texture2D" path="res://art/runtime/player.png" id="2_player"]
 
 [node name="Platform" type="Node2D"]
 script = ExtResource("1_platform")
 
-[node name="Body" type="StaticBody2D" parent="."]
-collision_layer = 4
-collision_mask = 2
+[node name="Body" type="Node2D" parent="."]
 
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Body"]
-position = Vector2(0, -4)
-shape = SubResource("RectangleShape2D_platform")
+[node name="Visual" type="Polygon2D" parent="Body"]
+position = Vector2(0, -2.75)
+color = Color(0.36, 0.4, 0.48, 1)
 
-[node name="Visual" type="Sprite2D" parent="Body"]
-position = Vector2(0, -4)
-texture = ExtResource("2_platformtex")
+[node name="VisualEdge" type="Polygon2D" parent="Body"]
+color = Color(0.55, 0.6, 0.7, 1)
+
+[node name="Player" type="Sprite2D" parent="Body"]
+position = Vector2(0, -18)
+texture = ExtResource("2_player")
 
 [node name="Muzzle" type="Marker2D" parent="Body"]
-position = Vector2(0, 16)
+position = Vector2(0, 5)
 
 [node name="Camera" type="Camera2D" parent="."]
 position_smoothing_enabled = true

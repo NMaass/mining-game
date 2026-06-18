@@ -1,0 +1,16 @@
+ore_gold,ore_gold,ore_gem,ore_copper,ore_copper,ore_copper,hard_rock
+ore_copper,ore_copper,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,ore_copper
+hard_rock,hard_rock,hard_rock,hard_rock,hard_rock,ore_copper,ore_gem
+ore_gem,ore_copper,ore_copper,ore_copper,ore_copper,ore_copper,ore_gold
+ore_gold,ore_gold,ore_gold,ore_gem,ore_gem,ore_gold,ore_gold
+ore_silver,ore_silver,ore_gold,ore_gold,ore_gold,ore_gold,ore_gold
+rock,ore_silver,ore_silver,ore_gold,ore_gold,ore_gold,ore_gem

@@ -77,6 +77,21 @@ func reset_angle() -> void:
 	_angle = Aim.DEFAULT_ANGLE
 	angle_changed.emit(_angle)
 
+## Set the angle directly (clamped to the valid aim range), emitting `angle_changed` if it moved.
+## Used by the keyboard-aim path (D1): held arrow keys glide the angle via Aim.keyboard_angle_step,
+## then push it here so the preview + platform look-ahead update through the SAME signal the drag
+## path uses (one shared aim API — AC-5.3.1/5.3.7). Ignored while input is disabled (charge in
+## flight / overlay open), matching the drag path's `_enabled` gate so neither bypasses it.
+func set_angle(value: float) -> void:
+	if not _enabled:
+		return
+	# Full 360° aim (v0.5): wrap into (-PI, PI] instead of clamping to a forward arc, so the
+	# keyboard / direct-set paths can aim any direction (incl. upward), same as the drag path.
+	var wrapped: float = Aim.wrap_angle(value)
+	if wrapped != _angle:
+		_angle = wrapped
+		angle_changed.emit(_angle)
+
 # ── Initial-arc preview (AC-5.3.1) ─────────────────────────────────────────
 
 ## Build the initial-arc preview for `params` from the fixed `muzzle` at the

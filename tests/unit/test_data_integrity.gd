@@ -28,15 +28,17 @@ func test_shipped_data_is_valid() -> void:
 	# If this fails, the printed list tells you exactly which rule broke.
 	assert_array(errors).override_failure_message(str(errors)).is_empty()
 
-func test_validator_catches_unknown_block_in_band() -> void:
+func test_validator_catches_unknown_block_in_curve() -> void:
+	# UNIT MAPGEN: an unknown block id in a curve anchor table fails the gate.
 	var t := _load_real_tables()
-	(t["depth_bands"][0]["block_weights"])["does_not_exist"] = 5
+	(t["depth_bands"]["surface_weights"])["does_not_exist"] = 5
 	assert_array(Validator.validate(t)).is_not_empty()
 
-func test_validator_catches_zero_weight() -> void:
+func test_validator_catches_zero_weight_in_curve() -> void:
+	# UNIT MAPGEN: a zero (or negative) weight in a curve anchor fails the gate.
 	var t := _load_real_tables()
-	var first_block: String = (t["depth_bands"][0]["block_weights"] as Dictionary).keys()[0]
-	(t["depth_bands"][0]["block_weights"])[first_block] = 0
+	var first_block: String = (t["depth_bands"]["surface_weights"] as Dictionary).keys()[0]
+	(t["depth_bands"]["surface_weights"])[first_block] = 0
 	assert_array(Validator.validate(t)).is_not_empty()
 
 func test_validator_catches_blast_radius_over_cap() -> void:
@@ -45,10 +47,11 @@ func test_validator_catches_blast_radius_over_cap() -> void:
 	(t["explosives"][first_ex])["blast_radius_cells"] = 999
 	assert_array(Validator.validate(t)).is_not_empty()
 
-# ── Depth reward: EV + gem probability rise with depth (AC-5.5.2) ───────────
-# v0.4.1 replaced the old "floor (minimum value) rises" clause with a hard, gate-checked
-# invariant. Each negative test breaks exactly ONE branch (EV or gem) and asserts the
-# AC-5.5.2 error fires — so the rule isn't passing for an unrelated reason.
+# ── Depth reward: EV + gem probability rise with depth, then freeze (AC-5.5.2) ──
+# UNIT MAPGEN: the depth_bands curve must keep EV + gem-prob STRICTLY rising from the surface
+# anchor to the cap anchor, then FROZEN below the cap (bounded richness). Each negative test
+# breaks exactly ONE branch (EV / gem / freeze) and asserts the AC-5.5.2 error fires — so the
+# rule isn't passing for an unrelated reason. The validator samples the continuous curve.
 
 func _ac552_errors(t: Dictionary) -> Array:
 	# Subset of validator errors attributable to the depth-reward rule.
@@ -59,19 +62,22 @@ func _ac552_errors(t: Dictionary) -> Array:
 	return out
 
 func test_shipped_data_passes_depth_reward() -> void:
-	# AC-5.5.2 (positive): the shipped bands DO have strictly-rising EV + gem probability.
+	# AC-5.5.2 (positive): the shipped curve DOES have strictly-rising EV + gem probability.
 	assert_array(_ac552_errors(_load_real_tables())).override_failure_message(
-		"shipped depth_bands must satisfy AC-5.5.2 depth reward"
+		"shipped depth_bands curve must satisfy AC-5.5.2 depth reward"
 	).is_empty()
 
 func test_validator_rejects_non_rising_expected_value() -> void:
-	# AC-5.5.2: deeper band with LOWER expected value (but still-rising gem prob, to isolate
-	# the EV branch). Deep = {ore_gold:3, rock:97} → gem 0.03 > surface 0.02, but EV 1.05 < 1.70.
+	# AC-5.5.2: a cap table NO RICHER than the surface in EV (but still-rising gem prob, to
+	# isolate the EV branch). cap = {ore_gem:1, rock:99} → gem prob rises (gem absent at surface),
+	# but EV 2.40 < surface EV 1.90? No — make EV strictly LOWER: cap = {ore_gem:1, dirt:99} → EV
+	# = 240/100 = 2.4 — still higher. Instead drop all value: cap = {ore_gem:1, rock:9999} keeps
+	# gem prob tiny-rising while EV ~0.024 < 1.90.
 	var t := _load_real_tables()
-	(t["depth_bands"][1])["block_weights"] = {"ore_gold": 3, "rock": 97}
+	(t["depth_bands"])["cap_weights"] = {"ore_gem": 1, "rock": 9999}
 	var errs := _ac552_errors(t)
 	assert_array(errs).override_failure_message(
-		"validator must reject a deeper band with non-rising expected value (AC-5.5.2)"
+		"validator must reject a cap table with non-rising expected value (AC-5.5.2)"
 	).is_not_empty()
 	# The EV branch specifically must be the one that fired.
 	var ev_hit := false
@@ -81,13 +87,14 @@ func test_validator_rejects_non_rising_expected_value() -> void:
 	assert_bool(ev_hit).override_failure_message(str(errs)).is_true()
 
 func test_validator_rejects_non_rising_gem_probability() -> void:
-	# AC-5.5.2: deeper band with LOWER gem probability (but rising EV, to isolate the gem
-	# branch). Deep = {ore_copper:50, rock:50} → EV 5.0 > 1.70, but gem prob 0.0 < 0.02.
+	# AC-5.5.2: a cap table with NO gem at depth (gem prob doesn't rise) but rising EV (rich
+	# copper), to isolate the gem branch. cap = {ore_copper:80, rock:20} → EV 9.6 > surface 1.9,
+	# but gem (ore_gem) prob stays 0 == surface 0.
 	var t := _load_real_tables()
-	(t["depth_bands"][1])["block_weights"] = {"ore_copper": 50, "rock": 50}
+	(t["depth_bands"])["cap_weights"] = {"ore_copper": 80, "rock": 20}
 	var errs := _ac552_errors(t)
 	assert_array(errs).override_failure_message(
-		"validator must reject a deeper band with non-rising gem probability (AC-5.5.2)"
+		"validator must reject a cap table with non-rising gem probability (AC-5.5.2)"
 	).is_not_empty()
 	var gem_hit := false
 	for e in errs:
@@ -146,17 +153,19 @@ func test_validator_accepts_slow_free_charge_against_scaled_floor() -> void:
 			free_id = id
 	assert_str(free_id).is_not_empty()
 	# Premise check: the free charge's centre damage is genuinely far below the worst-case
-	# scaled floor HP (so this test would FAIL under the old one-hit rule).
+	# scaled floor HP (so this test would FAIL under the old one-hit rule). UNIT MAPGEN: the
+	# worst-case floor sits at/below the cap depth where the HP multiplier hits its CEILING
+	# (max_depth_hp_mult), among the cheapest diggable block present in cap_weights.
 	var ex: Dictionary = t["explosives"][free_id]
 	var centre_damage: int = int(float(ex.get("blast_intensity", 0)) * float((ex.get("blast_falloff") as Array)[0]))
 	var b: Dictionary = t["balance"]
-	var deep_band: Dictionary = (t["depth_bands"] as Array).back()
+	var cap_weights: Dictionary = t["depth_bands"]["cap_weights"]
 	var min_base_hp := 1 << 30
-	for bid in (deep_band["block_weights"] as Dictionary).keys():
+	for bid in cap_weights.keys():
 		var blk: Dictionary = t["block_types"][bid]
 		if bool(blk.get("diggable", false)):
 			min_base_hp = mini(min_base_hp, int(blk.get("max_hp", 0)))
-	var depth_mult: float = 1.0 + float(int(deep_band["max_depth_cells"]) - 1) * float(b["depth_hp_mult_per_cell"])
+	var depth_mult: float = float(b["max_depth_hp_mult"])
 	var scaled_floor: int = int(round(float(min_base_hp) * depth_mult * float(b["mine_hardness_mult_max"])))
 	assert_int(centre_damage).override_failure_message(
 		"test premise broken: free charge already one-hits the scaled floor (%d >= %d)" % [centre_damage, scaled_floor]
@@ -262,6 +271,44 @@ func test_validator_requires_starting_money() -> void:
 	(t["balance"] as Dictionary).erase("starting_money")
 	assert_array(Validator.validate(t)).is_not_empty()
 
+# ── on_rest charge motion gate (the "sticky bomb explodes instantly" fix; AC-5.4.2) ──────────
+
+func test_validator_requires_charge_motion_gate() -> void:
+	# AC-5.4.2: the on_rest charge motion gate (charge_min_airtime_seconds / charge_min_travel_px)
+	# is a /data tunable — removing it fails the gate (balance is data, never a code literal).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("charge_min_airtime_seconds")
+	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_rejects_zero_charge_min_airtime() -> void:
+	# AC-5.4.2: a 0 airtime gate re-opens the frame-0 instant-detonation bug; the gate must reject it.
+	var t := _load_real_tables()
+	(t["balance"])["charge_min_airtime_seconds"] = 0.0
+	var errs: Array = Validator.validate(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("charge_min_airtime_seconds") and str(e).contains("> 0"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+func test_validator_rejects_airtime_gate_above_smallest_sticky_fuse() -> void:
+	# AC-5.4.2: the motion gate must sit BELOW the smallest sticky on_rest fuse_seconds so it can
+	# never delay a real stick-fuse. An airtime >= every sticky fuse must fail the gate.
+	var t := _load_real_tables()
+	(t["balance"])["charge_min_airtime_seconds"] = 99.0
+	var errs: Array = Validator.validate(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("charge_min_airtime_seconds") and str(e).contains("stick-fuse"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+func test_validator_rejects_negative_charge_min_travel() -> void:
+	# AC-5.4.2: the travel floor must be >= 0 (0 = airtime-only gating, valid; negative is meaningless).
+	var t := _load_real_tables()
+	(t["balance"])["charge_min_travel_px"] = -1.0
+	assert_array(Validator.validate(t)).is_not_empty()
+
 # ── Relic prestige value is exactly 1 (AC-5.6.6 v0.5) ─────────────────────────
 
 func test_shipped_relic_prestige_value_is_exactly_one() -> void:
@@ -281,15 +328,129 @@ func test_validator_rejects_relic_prestige_value_not_one() -> void:
 			hit = true
 	assert_bool(hit).override_failure_message(str(errs)).is_true()
 
-# ── Bounded mine geometry (AC-5.1.1 v0.5) ─────────────────────────────────────
+# ── Shaft Engineering money upgrade (Phase C, AC-5.12.x) ──────────────────────
 
-func test_validator_requires_bounded_mine_dimensions() -> void:
-	# AC-5.1.1: the mine must declare positive width and depth in cells.
+func test_shipped_shaft_engineering_upgrade_is_valid() -> void:
+	# The shipped data declares a Shaft Engineering money upgrade that the gate accepts.
+	var t := _load_real_tables()
+	assert_bool((t["upgrades"] as Dictionary).has("shaft_engineering")).is_true()
+	assert_array(Validator.validate(t)).is_empty()
+
+func test_validator_rejects_money_upgrade_without_price() -> void:
+	# A money upgrade must declare a positive money price.
+	var t := _load_real_tables()
+	(t["upgrades"]["shaft_engineering"]).erase("price")
+	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_rejects_shaft_width_reduction_with_positive_magnitude() -> void:
+	# shaft_width_reduction is a REDUCTION — a positive magnitude (a widening) is invalid.
+	var t := _load_real_tables()
+	(t["upgrades"]["shaft_engineering"])["magnitude"] = 2
+	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_rejects_shaft_reduction_below_platform_width() -> void:
+	# The fully-bought reduction may not narrow the shaft below the platform deck.
+	var t := _load_real_tables()
+	(t["upgrades"]["shaft_engineering"])["magnitude"] = -100
+	var errs: Array = Validator.validate(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("shaft_engineering") and str(e).contains("platform width"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+# ── Mines: surface + deeper money-gated mines (Deep Mine, AC-5.12.x) ───────────
+# _check_mines enforces the no-lose, money-per-dig model: at least one free starting mine, a valid
+# tint hex, a hardness bounded by the same HP-scaling cap the formula honors, and required multipliers.
+# The shipped data is asserted valid; each negative mutates a COPY of the real tables, breaks exactly
+# ONE rule, and asserts the matching error fires (so the gate isn't passing for an unrelated reason).
+
+func _mines_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).begins_with("mines"):
+			out.append(e)
+	return out
+
+func test_shipped_mines_table_is_valid() -> void:
+	# Positive: the shipped surface + deep mines satisfy _check_mines.
+	var t := _load_real_tables()
+	assert_bool((t["mines"] as Dictionary).has("surface")).is_true()
+	assert_bool((t["mines"] as Dictionary).has("deep")).is_true()
+	assert_array(_mines_errors(t)).override_failure_message(
+		"shipped mines.json must satisfy _check_mines"
+	).is_empty()
+
+func test_validator_rejects_mines_with_no_free_mine() -> void:
+	# (a) Every mine costing money to access leaves the player with no free starting mine — that
+	# breaks the no-lose model (a broke player could never dig). Give the free 'surface' mine a cost.
+	var t := _load_real_tables()
+	(t["mines"]["surface"])["access_cost"] = 50
+	var errs := _mines_errors(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("at least one mine must be free"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+func test_validator_rejects_invalid_mine_tile_tint() -> void:
+	# (b) tile_tint is the terrain modulate hex — a typo'd value would render magenta/disable the
+	# tint silently. A non-hex string must fail the gate.
+	var t := _load_real_tables()
+	(t["mines"]["deep"])["tile_tint"] = "not-a-hex"
+	var errs := _mines_errors(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("tile_tint") and str(e).contains("valid hex"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+func test_validator_rejects_mine_hardness_above_scaling_cap() -> void:
+	# (c) A mine's hardness_mult feeds the HP scaling formula; the data gate's worst-case no-stall
+	# check is bounded by balance.mine_hardness_mult_max. A mine harder than that cap would let the
+	# scaled floor HP exceed the bound the free-charge solvability proof relies on — reject it.
+	var t := _load_real_tables()
+	var cap: float = float((t["balance"] as Dictionary).get("mine_hardness_mult_max", 99.0))
+	(t["mines"]["deep"])["hardness_mult"] = cap + 1.0
+	var errs := _mines_errors(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("hardness_mult") and str(e).contains("mine_hardness_mult_max"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+func test_validator_rejects_mine_missing_ore_value_mult() -> void:
+	# (d) ore_value_mult is the per-mine credit multiplier — money the deeper mine pays. A missing
+	# value would silently read 0 (no ore pays out) and is a required field; the gate must reject it.
+	var t := _load_real_tables()
+	(t["mines"]["deep"] as Dictionary).erase("ore_value_mult")
+	var errs := _mines_errors(t)
+	var hit := false
+	for e in errs:
+		if str(e).contains("ore_value_mult"):
+			hit = true
+	assert_bool(hit).override_failure_message(str(errs)).is_true()
+
+# ── Mine geometry (AC-5.1.1; UNIT MAPGEN infinite descent) ────────────────────
+
+func test_validator_requires_mine_geometry_keys() -> void:
+	# The mine must declare a positive finite width and a present height key (0 = infinite).
 	var t := _load_real_tables()
 	(t["balance"] as Dictionary).erase("mine_width_cells")
 	assert_array(Validator.validate(t)).is_not_empty()
 	var t2 := _load_real_tables()
 	(t2["balance"] as Dictionary).erase("mine_height_cells")
+	assert_array(Validator.validate(t2)).is_not_empty()
+
+func test_validator_accepts_infinite_mine_height_sentinel() -> void:
+	# UNIT MAPGEN: mine_height_cells == 0 is the INFINITE-shaft sentinel and is VALID. The
+	# shipped data uses it, so the gate must accept 0 (a negative value is invalid).
+	var t := _load_real_tables()
+	assert_int(int((t["balance"] as Dictionary).get("mine_height_cells"))).is_equal(0)
+	assert_array(Validator.validate(t)).is_empty()
+	# A negative height is invalid.
+	var t2 := _load_real_tables()
+	(t2["balance"] as Dictionary)["mine_height_cells"] = -5
 	assert_array(Validator.validate(t2)).is_not_empty()
 
 func test_validator_rejects_shaft_wider_than_mine() -> void:
@@ -681,6 +842,18 @@ func test_validator_rejects_inverted_text_scale_band() -> void:
 	(t["balance"]["settings"])["text_scale_max"] = 1.0
 	assert_array(_settings_errors(t)).is_not_empty()
 
+func test_validator_requires_elevator_side_default() -> void:
+	# AC-5.10.1 (D2 controls): the elevator-side default is /data — a missing one fails the gate.
+	var t := _load_real_tables()
+	(t["balance"]["settings"] as Dictionary).erase("default_elevator_side")
+	assert_array(_settings_errors(t)).is_not_empty()
+
+func test_validator_rejects_invalid_elevator_side() -> void:
+	# AC-5.10.1 (D2 controls): the side must be exactly "left" or "right".
+	var t := _load_real_tables()
+	(t["balance"]["settings"])["default_elevator_side"] = "middle"
+	assert_array(_settings_errors(t)).is_not_empty()
+
 # ── VFX feel table (v0.5 arcade pass) ────────────────────────────────────────
 # The arcade-juice magnitudes are /data tunables; _check_vfx enumerates + range-checks every
 # key so a typo'd key can't silently read 0 (disabling a cue or soft-locking the hit-stop).
@@ -813,12 +986,114 @@ func test_validator_rejects_negative_recoil_px() -> void:
 		"validator must reject a negative feel.recoil_px"
 	).is_not_empty()
 
+
+# ── Elevator hold-to-move ramp (balance.elevator) ─────────────────────────────
+# The continuous-hold ramp constants (slow start → capped max) are /data tunables; _check_elevator
+# requires + range-checks all three so a typo'd key that silently reads 0 can't disable the hold or
+# invert the cap. Each negative asserts a balance.elevator error fires (mirrors the _feel_errors pattern).
+
+func _elevator_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("balance.elevator") or str(e).contains("'elevator'"):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_elevator_rules() -> void:
+	# Positive: the shipped elevator ramp table satisfies the gate.
+	assert_array(_elevator_errors(_load_real_tables())).override_failure_message(
+		"shipped balance.elevator must satisfy _check_elevator"
+	).is_empty()
+
+func test_validator_requires_elevator_table() -> void:
+	# The elevator ramp table is /data — a missing block fails the gate.
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("elevator")
+	assert_array(_elevator_errors(t)).override_failure_message(
+		"validator must reject a missing balance.elevator table"
+	).is_not_empty()
+
+func test_validator_rejects_zero_start_rows_per_sec() -> void:
+	# Mutation-verified: a 0 start speed would never move on the first frame — strictly > 0.
+	var t := _load_real_tables()
+	(t["balance"]["elevator"])["start_rows_per_sec"] = 0.0
+	assert_array(_elevator_errors(t)).override_failure_message(
+		"validator must reject elevator.start_rows_per_sec == 0"
+	).is_not_empty()
+
+func test_validator_rejects_negative_accel() -> void:
+	# Mutation-verified: the ramp accel is >= 0 (0 = a constant slow glide is fine; negative is nonsense).
+	var t := _load_real_tables()
+	(t["balance"]["elevator"])["accel_rows_per_sec2"] = -1.0
+	assert_array(_elevator_errors(t)).override_failure_message(
+		"validator must reject a negative elevator.accel_rows_per_sec2"
+	).is_not_empty()
+
+func test_validator_rejects_max_below_start() -> void:
+	# Mutation-verified: the capped max must be >= the start (a cap below the start would clamp the
+	# glide to BELOW its own starting speed — incoherent).
+	var t := _load_real_tables()
+	(t["balance"]["elevator"])["max_rows_per_sec"] = 0.5
+	(t["balance"]["elevator"])["start_rows_per_sec"] = 2.0
+	assert_array(_elevator_errors(t)).override_failure_message(
+		"validator must reject elevator.max_rows_per_sec < start_rows_per_sec"
+	).is_not_empty()
+
 func test_validator_rejects_zero_muzzle_flash_particles() -> void:
 	# Mutation-verified key #6: the muzzle flash needs >= 1 particle to read. A 0 burst is invisible.
 	var t := _load_real_tables()
 	(t["balance"]["feel"])["muzzle_flash_particles"] = 0
 	assert_array(_feel_errors(t)).override_failure_message(
 		"validator must reject feel.muzzle_flash_particles == 0"
+	).is_not_empty()
+
+func test_validator_requires_aim_dash_tunables() -> void:
+	# AC-5.3.1 (aim preview): the marching-dash aim shader (UNIT C) reads aim_dash_px / aim_gap_px /
+	# aim_march_px from balance.feel. They are REQUIRED + range-checked so a typo'd key can't silently
+	# read 0 (a missing dash key would collapse the dash period or freeze the march with no warning).
+	for key in ["aim_dash_px", "aim_gap_px", "aim_march_px"]:
+		var t := _load_real_tables()
+		(t["balance"]["feel"] as Dictionary).erase(key)
+		assert_array(_feel_errors(t)).override_failure_message(
+			"validator must reject a feel table missing '%s'" % key
+		).is_not_empty()
+
+func test_validator_requires_keyboard_aim_rate() -> void:
+	# D1 (AC-5.3.1/5.3.2): the held-arrow-key aim rate (feel.keyboard_aim_deg_per_sec) is /data so the
+	# keyboard aim speed is a tunable, not a code literal. REQUIRED — a missing key fails the gate.
+	var t := _load_real_tables()
+	(t["balance"]["feel"] as Dictionary).erase("keyboard_aim_deg_per_sec")
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject a feel table missing 'keyboard_aim_deg_per_sec'"
+	).is_not_empty()
+
+func test_validator_rejects_nonpositive_keyboard_aim_rate() -> void:
+	# D1: the rate is strictly > 0 — a 0/negative rate would make the arrow keys unable to aim
+	# (Aim.keyboard_angle_step early-returns on rate <= 0). Reject zero.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["keyboard_aim_deg_per_sec"] = 0.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.keyboard_aim_deg_per_sec == 0"
+	).is_not_empty()
+
+func test_validator_rejects_negative_aim_dash_tunables() -> void:
+	# AC-5.3.1: each dash magnitude is >= 0 (0 march = a static dash, valid). A negative dash/gap/march
+	# is nonsensical (a negative period flips the dash; a negative march scrolls backward).
+	for key in ["aim_dash_px", "aim_gap_px", "aim_march_px"]:
+		var t := _load_real_tables()
+		(t["balance"]["feel"])[key] = -1.0
+		assert_array(_feel_errors(t)).override_failure_message(
+			"validator must reject a negative feel.%s" % key
+		).is_not_empty()
+
+func test_validator_rejects_zero_dash_period() -> void:
+	# AC-5.3.1: dash_px + gap_px is the dash PERIOD; the marching-dash shader divides by it, so it MUST
+	# be > 0 even though each term may individually be 0. Both zero (a zero period) must be rejected.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["aim_dash_px"] = 0.0
+	(t["balance"]["feel"])["aim_gap_px"] = 0.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject a zero dash period (aim_dash_px + aim_gap_px == 0)"
 	).is_not_empty()
 
 # ── Data-driven SFX table (v0.5 arcade audio pass) ───────────────────────────

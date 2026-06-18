@@ -1,5 +1,6 @@
 {
-  "min_depth_cells": 60,
-  "depth_span_cells": 40,
+  "min_depth_cells": 300,
+  "depth_span_cells": 120,
+  "relic_band_half_cells": 6,
   "prestige_value": 1
 }

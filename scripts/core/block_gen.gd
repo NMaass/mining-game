@@ -8,8 +8,9 @@ extends RefCounted
 ## Generation is a PURE, deterministic function of (mine_seed, absolute cell):
 ## identical output forever, every run, every fresh instance (AC-5.1.4). The block
 ## type is chosen with COHERENT noise (FastNoiseLite) so ore forms veins/clusters
-## rather than per-cell salt-and-pepper (AC-5.1.7), and the choice is depth-banded
-## (AC-5.1.3) via the depth band's block_weights.
+## rather than per-cell salt-and-pepper (AC-5.1.7), and the choice is depth-scaled
+## (AC-5.1.3) via the CONTINUOUS depth-weight curve (Registry.depth_weights_at:
+## surface_weights → cap_weights, bounded at the cap). The shaft is INFINITE in depth.
 ##
 ## Coherence + correct distribution at once: the coherent noise value is normalized
 ## to an (approximately) uniform roll in [0,1) by a normal-CDF transform calibrated
@@ -29,7 +30,7 @@ extends RefCounted
 ## Returns the block type id for absolute cell (x, y) under the given mine seed.
 ## x = column (0..shaft_width-1), y = row (depth in cells, 0 = top).
 static func block_at(tables: Dictionary, mine_seed: int, x: int, y: int) -> String:
-	var weights: Dictionary = Registry.band_weights_at(tables, y)
+	var weights: Dictionary = Registry.depth_weights_at(tables, y)
 	if weights.is_empty():
 		return "air"
 	var noise: FastNoiseLite = _make_noise(tables, mine_seed)
@@ -45,7 +46,7 @@ static func generate_region(tables: Dictionary, mine_seed: int,
 	var region: Array = []
 	for row in range(height):
 		var world_y: int = start_y + row
-		var weights: Dictionary = Registry.band_weights_at(tables, world_y)
+		var weights: Dictionary = Registry.depth_weights_at(tables, world_y)
 		var row_data: Array = []
 		for col in range(width):
 			var world_x: int = start_x + col
@@ -84,7 +85,14 @@ static func relic_cell(tables: Dictionary, mine_seed: int) -> Vector2i:
 	# Two decorrelated hashes off the mine seed: one for the column, one for the row.
 	var hx: int = _hash2(mine_seed, 0x9E3779B1)
 	var hy: int = _hash2(mine_seed, 0x85EBCA77)
-	var col: int = hx % width
+	# Column is confined to a (2*half+1)-wide band CENTERED on the mine (AC-5.6.1): with
+	# half = 6 this is the 13-wide band |relic_col - center| <= 6 — so the relic always
+	# sits on/near the descent corridor in the infinite shaft, not against a far wall.
+	var center: int = int(width / 2)
+	var half: int = maxi(0, Registry.relic_band_half_cells(tables))
+	var span_cols: int = 2 * half + 1
+	var col: int = center + (hx % span_cols) - half
+	col = clampi(col, 0, width - 1)
 	var depth: int = min_depth + (hy % span)
 	return Vector2i(col, depth)
 

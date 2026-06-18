@@ -37,7 +37,15 @@
     "max_hp": 70,
     "diggable": true,
     "palette_index": 9,
-    "ore": { "value": 10 }
+    "ore": { "value": 12 }
+  },
+  "ore_silver": {
+    "display_name": "Silver Ore",
+    "hardness": 3,
+    "max_hp": 100,
+    "diggable": true,
+    "palette_index": 10,
+    "ore": { "value": 35 }
   },
   "ore_gold": {
     "display_name": "Gold Ore",
@@ -45,6 +53,14 @@
     "max_hp": 110,
     "diggable": true,
     "palette_index": 11,
-    "ore": { "value": 35 }
+    "ore": { "value": 30 }
+  },
+  "ore_gem": {
+    "display_name": "Gemstone",
+    "hardness": 4,
+    "max_hp": 150,
+    "diggable": true,
+    "palette_index": 12,
+    "ore": { "value": 240 }
   }
 }

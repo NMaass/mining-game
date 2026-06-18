@@ -50,6 +50,11 @@ var _pack_rng := RandomNumberGenerator.new()
 ## Draws since the last tier>=2 roll, for pity (AC-5.4.4). Per pack id.
 var _pity_counter: Dictionary = {}
 
+## Per-dig MONEY upgrade levels (id -> level), bought with in-dig money via the shop.
+## RESET each dig (no persistence) — re-buyable next dig. Distinct from prestige (which
+## persists). Drives, e.g., the Shaft Engineering clearance reduction this dig.
+var _upgrade_levels: Dictionary = {}
+
 func _init(tables: Dictionary, economy: Economy, prestige: Prestige = null) -> void:
 	_tables = tables
 	_economy = economy
@@ -67,6 +72,7 @@ func start_dig() -> void:
 	_relic_collected = false
 	_dig_ended = false
 	_pity_counter.clear()
+	_upgrade_levels.clear()  # per-dig money upgrades reset with the dig (no persistence)
 	_selected_id = _free_charge_id
 	_economy.reset_run()
 	# Reproducible pack rolls: seed the run-scoped RNG from the run seed (AC-5.4.5).
@@ -132,6 +138,30 @@ func select(charge_id: String) -> bool:
 		return true
 	return false
 
+## Cycle the selection to the NEXT distinct tray slot (free charge + one entry per finite type),
+## wrapping around. Drives the Tab key. Returns the newly-selected id. The free charge is always
+## the first slot; finite types follow in tray order (deduped). With only the free charge in the
+## tray this is a no-op that returns the free charge.
+func select_next() -> String:
+	var slots: Array = _distinct_slots()
+	if slots.size() <= 1:
+		_selected_id = _free_charge_id
+		return _selected_id
+	var cur: int = slots.find(selected_id)
+	var nxt: int = (cur + 1) % slots.size() if cur >= 0 else 0
+	_selected_id = str(slots[nxt])
+	return _selected_id
+
+## The distinct selectable slots in tray order: the free charge first, then each finite type once.
+func _distinct_slots() -> Array:
+	var out: Array = []
+	if _free_charge_id != "":
+		out.append(_free_charge_id)
+	for id in _finite_tray:
+		if not out.has(id):
+			out.append(id)
+	return out
+
 # ── Throw ─────────────────────────────────────────────────────────────────────
 
 ## Throw the selected charge. Returns the explosive id thrown (always non-empty —
@@ -179,8 +209,26 @@ func buy_pack(pack_id: String) -> bool:
 	var price: int = int(pack_data.get("price", 0))
 	if not _economy.debit(price):
 		return false
+	var before: int = _finite_tray.size()
 	_grant_pack(pack_id)
+	# Auto-select the LOWEST-rarity charge just granted (so a pack buy readies its most basic
+	# charge, not whatever was selected before). Ties resolve to the first granted in tray order.
+	_select_lowest_rarity_granted(before)
 	return true
+
+## Select the lowest-rarity finite charge among those granted this buy (the slice of the finite
+## tray added since `from_index`). No-op if nothing new was granted.
+func _select_lowest_rarity_granted(from_index: int) -> void:
+	var best_id: String = ""
+	var best_rank: int = 1 << 30
+	for i in range(from_index, _finite_tray.size()):
+		var id: String = str(_finite_tray[i])
+		var rank: int = Registry.rarity_rank(_tables, str(Registry.explosive(_tables, id).get("rarity", "")))
+		if rank < best_rank:
+			best_rank = rank
+			best_id = id
+	if best_id != "":
+		_selected_id = best_id
 
 ## Roll a pack's charges into the finite tray using the run-scoped RNG.
 func _grant_pack(pack_id: String) -> void:
@@ -286,6 +334,38 @@ var run_ended: bool:
 ## the bought upgrade makes subsequent digs measurably stronger (AC-5.6.4).
 func buy_upgrade(upgrade_id: String) -> bool:
 	return _prestige.buy_upgrade(upgrade_id)
+
+# ── Per-dig MONEY upgrades (Shaft Engineering) ────────────────────────────────
+
+## Current per-dig level of a money upgrade (0 if not bought this dig).
+func upgrade_level(upgrade_id: String) -> int:
+	return int(_upgrade_levels.get(upgrade_id, 0))
+
+## Buy one level of a per-dig money upgrade. Debits its money price via Economy; rejects
+## unknown ids, unaffordable buys, and buys past max_level. The level resets at the next
+## start_dig (no persistence). Returns true on success.
+func buy_money_upgrade(upgrade_id: String) -> bool:
+	var up: Dictionary = Registry.upgrade(_tables, upgrade_id)
+	if up.is_empty():
+		return false
+	var max_level: int = int(up.get("max_level", 0))
+	if max_level > 0 and upgrade_level(upgrade_id) >= max_level:
+		return false
+	var price: int = int(up.get("price", 0))
+	if price <= 0 or not _economy.debit(price):
+		return false
+	_upgrade_levels[upgrade_id] = upgrade_level(upgrade_id) + 1
+	return true
+
+## Total reduction (in whole cells) to the required shaft clearance width from purchased
+## per-dig "shaft_width_reduction" upgrades. 0 with none; each level adds |magnitude| cells.
+func shaft_width_reduction() -> int:
+	var total: int = 0
+	for id in Registry.upgrade_ids(_tables):
+		var up: Dictionary = Registry.upgrade(_tables, str(id))
+		if str(up.get("effect", "")) == "shaft_width_reduction":
+			total += int(round(absf(float(up.get("magnitude", 0.0))))) * upgrade_level(str(id))
+	return total
 
 ## The blast intensity a charge of `base_intensity` deals THIS dig, after applying
 ## banked prestige upgrades (AC-5.6.4: the next dig is measurably stronger). The dig

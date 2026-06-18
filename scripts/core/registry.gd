@@ -53,38 +53,102 @@ static func diggable_block_ids(tables: Dictionary) -> Array:
 			result.append(id)
 	return result
 
-# ── Depth band lookup ───────────────────────────────────────────────────────
+# ── Depth-scaled weight curve (UNIT MAPGEN — infinite descent) ────────────────
+## The mine is an INFINITE vertical shaft of finite width. Block-type weights are a
+## CONTINUOUS interpolation between two anchor tables — `surface_weights` (at depth
+## `surface_depth_cells`) and `cap_weights` (at depth `cap_depth_cells` and everywhere
+## below) — so EV + gem-probability rise monotonically with depth toward a finite,
+## bounded CAP, then freeze (the mine never becomes a free money printer). The curve
+## descriptor lives in data/depth_bands.json (kept the filename; shape changed). The
+## resulting {id: weight} dict feeds the EXISTING BlockGen noise→CDF pipeline unchanged.
+##
+## ACs: AC-5.1.3 (depth-scaled gen), AC-5.5.2 (depth reward, bounded + monotone),
+##      AC-5.8.8 (HUD resource odds at the current depth).
 
-## Returns the depth band dict for a given depth in cells. Bands are checked
-## in order; the first band whose range contains the depth wins.
-## Returns {} if no band matches.
-static func depth_band_for(tables: Dictionary, depth_cells: int) -> Dictionary:
-	var bands: Variant = tables.get("depth_bands")
-	if not (bands is Array):
+## The whole depth_bands.json curve descriptor, or {} if absent/malformed.
+static func depth_curve(tables: Dictionary) -> Dictionary:
+	var c: Variant = tables.get("depth_bands")
+	return c if c is Dictionary else {}
+
+## The shallow anchor weight table (depth == surface_depth_cells). {} if absent.
+static func surface_weights(tables: Dictionary) -> Dictionary:
+	var w: Variant = depth_curve(tables).get("surface_weights")
+	return w if w is Dictionary else {}
+
+## The rich anchor weight table (depth >= cap_depth_cells). {} if absent.
+static func cap_weights(tables: Dictionary) -> Dictionary:
+	var w: Variant = depth_curve(tables).get("cap_weights")
+	return w if w is Dictionary else {}
+
+## Depth (cells) at/below which weights equal cap_weights exactly (the richness ceiling).
+static func cap_depth_cells(tables: Dictionary) -> int:
+	return int(depth_curve(tables).get("cap_depth_cells", 0))
+
+## Depth (cells) of the shallow anchor (normally 0).
+static func surface_depth_cells(tables: Dictionary) -> int:
+	return int(depth_curve(tables).get("surface_depth_cells", 0))
+
+## The interpolation shape ("smoothstep" or "linear"). Data-driven so the pacing of the
+## EV ramp can be tuned without code.
+static func gen_curve(tables: Dictionary) -> String:
+	return str(depth_curve(tables).get("curve", "linear"))
+
+## Bucket size (cells) the HUD odds readout snaps to, so the readout is stable as the
+## player descends a few cells rather than flickering per row (AC-5.8.8). >= 1.
+static func hud_sample_band_cells(tables: Dictionary) -> int:
+	return maxi(1, int(depth_curve(tables).get("hud_sample_band_cells", 1)))
+
+## Normalized, eased depth parameter s ∈ [0,1] for an absolute depth `y`. CLAMPED to 1
+## at/below the cap (this is the bound that freezes EV/gem-prob below cap_depth_cells).
+static func depth_curve_s(tables: Dictionary, depth_cells: int) -> float:
+	var sd: int = surface_depth_cells(tables)
+	var cap: int = cap_depth_cells(tables)
+	if cap <= sd:
+		return 1.0
+	var t_raw: float = float(depth_cells - sd) / float(cap - sd)
+	var t: float = clampf(t_raw, 0.0, 1.0)  # the CAP — t never exceeds 1
+	if gen_curve(tables) == "smoothstep":
+		return t * t * (3.0 - 2.0 * t)
+	return t
+
+## Continuous block-weight table at absolute depth `y`: weight(b,y) =
+## lerp(surface_weights[b], cap_weights[b], s). A block absent from one anchor counts
+## as weight 0 there (dirt fades out, hard_rock/gem fade in). Zero-weight ids are
+## omitted from the returned dict (so the weighted pick never wastes a CDF slot on them).
+## This REPLACES the old discrete band lookup; same {id: weight} contract for BlockGen.
+static func depth_weights_at(tables: Dictionary, depth_cells: int) -> Dictionary:
+	var sw: Dictionary = surface_weights(tables)
+	var cw: Dictionary = cap_weights(tables)
+	if sw.is_empty() and cw.is_empty():
 		return {}
-	for band in bands:
-		if not (band is Dictionary):
-			continue
-		var min_d: int = int(band.get("min_depth_cells", 0))
-		var max_d: int = int(band.get("max_depth_cells", 0))
-		if depth_cells >= min_d and depth_cells < max_d:
-			return band
-	return {}
+	var s: float = depth_curve_s(tables, depth_cells)
+	var ids: Dictionary = {}
+	for k in sw.keys():
+		ids[k] = true
+	for k in cw.keys():
+		ids[k] = true
+	var out: Dictionary = {}
+	for id in ids.keys():
+		var a: float = float(sw.get(id, 0.0))
+		var b: float = float(cw.get(id, 0.0))
+		var w: float = a + s * (b - a)
+		if w > 0.0:
+			out[id] = w
+	return out
 
-## Returns the block_weights dict for the band at a given depth. {} if no band.
+## Backwards-compatible alias retained for the many call sites that ask "what blocks
+## generate at this depth". Now backed by the continuous curve (no discrete bands).
 static func band_weights_at(tables: Dictionary, depth_cells: int) -> Dictionary:
-	var band: Dictionary = depth_band_for(tables, depth_cells)
-	var w: Variant = band.get("block_weights")
-	if w is Dictionary:
-		return w
-	return {}
+	return depth_weights_at(tables, depth_cells)
 
-
-## Returns the probability (0..1) for each block id in the band at `depth_cells`. Weights are
-## normalized by their total; {} if no band. Used by the HUD depth resource-odds readout
-## (AC-5.8.8).
-static func band_odds(tables: Dictionary, depth_cells: int) -> Dictionary:
-	var weights: Dictionary = band_weights_at(tables, depth_cells)
+## Returns the probability (0..1) for each block id at `depth_cells`, normalized by the
+## total weight; {} if no curve. The depth is SNAPPED to `hud_sample_band_cells` buckets
+## so the readout doesn't flicker per row as the platform descends (AC-5.8.8).
+static func depth_odds_at(tables: Dictionary, depth_cells: int) -> Dictionary:
+	var bucket: int = hud_sample_band_cells(tables)
+	@warning_ignore("integer_division")
+	var snapped: int = (maxi(0, depth_cells) / bucket) * bucket
+	var weights: Dictionary = depth_weights_at(tables, snapped)
 	var total: float = 0.0
 	for k in weights.keys():
 		total += float(weights[k])
@@ -94,6 +158,10 @@ static func band_odds(tables: Dictionary, depth_cells: int) -> Dictionary:
 	for k in weights.keys():
 		odds[k] = float(weights[k]) / total
 	return odds
+
+## Backwards-compatible alias for the HUD odds readout.
+static func band_odds(tables: Dictionary, depth_cells: int) -> Dictionary:
+	return depth_odds_at(tables, depth_cells)
 
 # ── Explosive lookup ────────────────────────────────────────────────────────
 
@@ -173,11 +241,31 @@ static func crack_stages(tables: Dictionary) -> int:
 static func shaft_width(tables: Dictionary) -> int:
 	return int(balance(tables, "shaft_width_cells"))
 
+static func platform_width_cells(tables: Dictionary) -> int:
+	return int(balance(tables, "platform_width_cells", shaft_width(tables)))
+
 static func mine_width_cells(tables: Dictionary) -> int:
 	return int(balance(tables, "mine_width_cells", shaft_width(tables)))
 
+## Mine height in cells. 0 (or negative) is the INFINITE-descent sentinel (UNIT MAPGEN):
+## the vertical shaft has no bottom; the relic ends each dig at a finite depth instead.
 static func mine_height_cells(tables: Dictionary) -> int:
 	return int(balance(tables, "mine_height_cells", 0))
+
+## True iff the mine is the infinite vertical shaft (no bottom row).
+static func is_infinite_depth(tables: Dictionary) -> bool:
+	return mine_height_cells(tables) <= 0
+
+## The deepest valid row to clamp UI/platform descent against. For the infinite shaft
+## (mine_height_cells <= 0) there is no bottom, so this returns a very large sentinel so
+## that `mini(support_row, bottom)` always resolves to the real support-driven limit.
+## For a bounded mine it is mine_height_cells - 1 (the last in-range row).
+const INFINITE_BOTTOM_ROW := 1 << 30
+static func mine_bottom_row(tables: Dictionary) -> int:
+	var h: int = mine_height_cells(tables)
+	if h <= 0:
+		return INFINITE_BOTTOM_ROW
+	return h - 1
 
 static func shaft_left_cell(tables: Dictionary) -> int:
 	var mine_w: int = mine_width_cells(tables)
@@ -214,11 +302,37 @@ static func descent_max_steps(tables: Dictionary) -> int:
 static func descent_tween_seconds(tables: Dictionary) -> float:
 	return float(balance(tables, "descent_tween_seconds"))
 
+# ── Elevator hold-to-move ramp (continuous row-by-row glide while held) ────────
+## The `balance.elevator` sub-table: the ramp constants for holding an elevator button/key.
+## Tunables are data, so these live in /data and the data gate enforces presence + ranges
+## (_check_elevator). Reads {} if absent (invalid — the gate catches it before the game runs).
+static func elevator(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("elevator", {})
+	return x if x is Dictionary else {}
+
+## Initial hold speed (rows/sec) at the start of a fresh press — the slow start before the ramp.
+static func elevator_start_rows_per_sec(tables: Dictionary) -> float:
+	return float(elevator(tables).get("start_rows_per_sec", 2.0))
+
+## Ramp acceleration (rows/sec²): how fast the held speed climbs from the slow start.
+static func elevator_accel_rows_per_sec2(tables: Dictionary) -> float:
+	return float(elevator(tables).get("accel_rows_per_sec2", 6.0))
+
+## Capped maximum hold speed (rows/sec): the held glide never exceeds this.
+static func elevator_max_rows_per_sec(tables: Dictionary) -> float:
+	return float(elevator(tables).get("max_rows_per_sec", 14.0))
+
 ## Vertical lookahead, in cells, of the camera anchor BELOW the platform target.
 ## The camera follows the platform target offset by this much (still anchored to
 ## the platform target, smoothed — never hard-set per frame). Data-driven.
 static func camera_lookahead_cells(tables: Dictionary) -> int:
 	return int(balance(tables, "camera_lookahead_cells"))
+
+static func camera_platform_screen_fraction(tables: Dictionary) -> float:
+	return float(balance(tables, "camera_platform_screen_fraction", 0.5))
+
+static func support_extend_seconds(tables: Dictionary) -> float:
+	return float(balance(tables, "support_extend_seconds", 0.25))
 
 ## Camera zoom for the wide mine view. Values below 1.0 show more world and make the
 ## 16px sourced tiles read smaller on screen.
@@ -254,6 +368,102 @@ static func effective_throw_cooldown(tables: Dictionary, prestige: Prestige) -> 
 ## Effective headlamp light radius after prestige Mining Torch upgrades.
 static func effective_light_radius(tables: Dictionary, prestige: Prestige) -> float:
 	return prestige.dig_light_radius(light_radius_px(tables))
+
+## Effective required shaft clearance width after a `reduction` (in cells) from the
+## per-dig Shaft Engineering money upgrade. Floored to the platform width so the corridor
+## can never be narrower than the deck, and kept ODD (the corridor needs a center line —
+## same invariant the data gate enforces on the base width). 9 → 7 with the shipped upgrade.
+static func effective_shaft_width(tables: Dictionary, reduction: int) -> int:
+	var min_w: int = platform_width_cells(tables)
+	var w: int = shaft_width(tables) - maxi(0, reduction)
+	if w < min_w:
+		w = min_w
+	if w % 2 == 0:
+		w = maxi(min_w, w - 1)
+	return w
+
+## Left cell of a shaft of `eff_width`, centered in the bounded mine. The clearance band
+## stays centered as Shaft Engineering narrows it (it shrinks inward from both edges).
+static func effective_shaft_left_cell(tables: Dictionary, eff_width: int) -> int:
+	return maxi(0, int(floor(float(mine_width_cells(tables) - eff_width) * 0.5)))
+
+# ── Per-dig money upgrades (Shaft Engineering, etc.) ──────────────────────────
+
+## All money-upgrade ids (insertion order), or [] if the optional table is absent.
+static func upgrade_ids(tables: Dictionary) -> Array:
+	var ups: Variant = tables.get("upgrades")
+	if ups is Dictionary:
+		return (ups as Dictionary).keys()
+	return []
+
+## Rank of a rarity name (0 = lowest/common, higher = rarer), from the ORDER of the keys in
+## rarity.json's `colors` map (common, uncommon, rare, epic, legendary). Unknown rarities rank
+## last so they never get auto-selected over a known low rarity. Used to pick the lowest-rarity
+## charge to auto-select after a pack buy.
+static func rarity_rank(tables: Dictionary, rarity: String) -> int:
+	var rar: Variant = tables.get("rarity")
+	if rar is Dictionary:
+		var colors: Variant = (rar as Dictionary).get("colors")
+		if colors is Dictionary:
+			var keys: Array = (colors as Dictionary).keys()
+			var idx: int = keys.find(rarity)
+			return idx if idx >= 0 else keys.size()
+	return 1 << 20
+
+## A single money-upgrade definition by id, or {} if unknown.
+static func upgrade(tables: Dictionary, upgrade_id: String) -> Dictionary:
+	var ups: Variant = tables.get("upgrades")
+	if ups is Dictionary and (ups as Dictionary).has(upgrade_id):
+		return (ups as Dictionary)[upgrade_id]
+	return {}
+
+# ── Mines (surface + deeper, money-gated mines) ───────────────────────────────
+
+## All mine ids (insertion order). The first free (access_cost 0) mine is the default.
+static func mine_ids(tables: Dictionary) -> Array:
+	var mines: Variant = tables.get("mines")
+	if mines is Dictionary:
+		return (mines as Dictionary).keys()
+	return []
+
+## A single mine definition by id, or {} if unknown.
+static func mine(tables: Dictionary, mine_id: String) -> Dictionary:
+	var mines: Variant = tables.get("mines")
+	if mines is Dictionary and (mines as Dictionary).has(mine_id):
+		return (mines as Dictionary)[mine_id]
+	return {}
+
+## The default (starting) mine id: the first mine with access_cost == 0, else the first id,
+## else "" if there is no mines table.
+static func default_mine_id(tables: Dictionary) -> String:
+	var ids: Array = mine_ids(tables)
+	for id in ids:
+		if int(mine(tables, str(id)).get("access_cost", 0)) == 0:
+			return str(id)
+	return str(ids[0]) if not ids.is_empty() else ""
+
+## Per-mine HP multiplier (harder rock deeper). Defaults to 1.0 for an absent mine.
+static func mine_hardness_mult(tables: Dictionary, mine_id: String) -> float:
+	return float(mine(tables, mine_id).get("hardness_mult", 1.0))
+
+## Per-mine ore-value multiplier (richer ore deeper). Defaults to 1.0.
+static func mine_ore_value_mult(tables: Dictionary, mine_id: String) -> float:
+	return float(mine(tables, mine_id).get("ore_value_mult", 1.0))
+
+## One-time money cost to unlock access to a mine. 0 = free (the starting mine).
+static func mine_access_cost(tables: Dictionary, mine_id: String) -> int:
+	return int(mine(tables, mine_id).get("access_cost", 0))
+
+## Seed offset so each mine generates a distinct layout + relic placement. 0 = base layout.
+static func mine_seed_offset(tables: Dictionary, mine_id: String) -> int:
+	return int(mine(tables, mine_id).get("seed_offset", 0))
+
+## The terrain tint (modulate) for a mine — a darker cut reads as "deeper". White = no tint.
+static func mine_tile_tint(tables: Dictionary, mine_id: String) -> Color:
+	var hex: String = str(mine(tables, mine_id).get("tile_tint", "#ffffff"))
+	if not Color.html_is_valid(hex):
+		return Color(1, 1, 1, 1)
+	return Color.html(hex)
 
 # ── Portrait HUD layout (U10 / AC-5.8.5) ──────────────────────────────────────
 ## Minimum interactive-control edge (pixels) for thumb-safe touch targets. The HUD
@@ -362,17 +572,29 @@ static func feel_i(tables: Dictionary, key: String, default_value: int = 0) -> i
 static func depth_hp_mult_per_cell(tables: Dictionary) -> float:
 	return float(balance(tables, "depth_hp_mult_per_cell"))
 
+## Upper bound on the depth HP multiplier (1 + depth*k). In an INFINITE shaft this clamp
+## is REQUIRED (else HP grows without bound and even the best charge stalls past some
+## depth). Mirrors the EV cap: HP stops scaling once depth_mult hits this ceiling. Reads 0
+## if absent (invalid — the data gate enforces presence > 0 and >= 1).
+static func max_depth_hp_mult(tables: Dictionary) -> float:
+	return float(balance(tables, "max_depth_hp_mult"))
+
 ## The hardest mine's HP multiplier (worst case for no-stall checks). Per-mine
 ## multipliers land with the mine-select unit; this is the data-gate's upper bound.
 static func mine_hardness_mult_max(tables: Dictionary) -> float:
 	return float(balance(tables, "mine_hardness_mult_max"))
 
 ## Scaled HP for a block at a given absolute depth + per-mine hardness multiplier:
-## base_hp(type) * (1 + depth_cells * depth_hp_mult_per_cell) * mine_hardness_mult.
-## Pure derivation (AC-5.2.1); U3 applies it once at chunk init and stores per-cell.
+## base_hp(type) * min(1 + depth_cells * depth_hp_mult_per_cell, max_depth_hp_mult) *
+## mine_hardness_mult. The depth multiplier is CLAMPED to max_depth_hp_mult so HP stays
+## bounded in the infinite shaft (mirrors the EV cap; UNIT MAPGEN). Pure derivation
+## (AC-5.2.1); U3 applies it once at chunk init and stores per-cell.
 static func scaled_block_hp(tables: Dictionary, id: String, depth_cells: int, mine_hardness_mult: float = 1.0) -> int:
 	var base_hp: int = block_max_hp(tables, id)
 	var depth_mult: float = 1.0 + float(depth_cells) * depth_hp_mult_per_cell(tables)
+	var cap: float = max_depth_hp_mult(tables)
+	if cap > 0.0:
+		depth_mult = minf(depth_mult, cap)
 	return int(round(float(base_hp) * depth_mult * mine_hardness_mult))
 
 # ── Relics (AC-5.6.1, AC-5.6.2, AC-5.6.6) ─────────────────────────────────────
@@ -383,6 +605,17 @@ static func relic_prestige_value(tables: Dictionary) -> int:
 	if relics is Dictionary:
 		return int((relics as Dictionary).get("prestige_value", 0))
 	return 0
+
+## Half-width (cells) of the center band the relic column is confined to: the relic
+## column satisfies |relic_col - center_col| <= relic_band_half_cells (a 13-wide band at
+## 6). Keeps the relic on the descent corridor in the infinite shaft (AC-5.6.1). Reads 6
+## if absent so an un-migrated relics.json still confines the column reasonably; the data
+## gate enforces presence + that the band fits the configured width.
+static func relic_band_half_cells(tables: Dictionary) -> int:
+	var relics: Variant = tables.get("relics")
+	if relics is Dictionary:
+		return int((relics as Dictionary).get("relic_band_half_cells", 6))
+	return 6
 
 # ── Prestige upgrades (AC-5.6.4, AC-5.12.x) ──────────────────────────────────
 ## Returns the prestige-upgrade definition dict for the given id, or {} if unknown.

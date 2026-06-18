@@ -370,3 +370,91 @@ func test_upgrade_respects_max_level() -> void:
 		if run.buy_upgrade(up_id):
 			bought += 1
 	assert_int(bought).is_equal(max_level)
+
+# ── Per-dig MONEY upgrades: Shaft Engineering (Phase C, AC-5.12.x) ─────────────
+
+func test_buy_money_upgrade_requires_money() -> void:
+	# A money upgrade with insufficient money is rejected (no level, no reduction).
+	var run := _make_run()  # broke (starting_money pinned to 0 here)
+	assert_bool(run.buy_money_upgrade("shaft_engineering")).is_false()
+	assert_int(run.upgrade_level("shaft_engineering")).is_equal(0)
+	assert_int(run.shaft_width_reduction()).is_equal(0)
+
+func test_buy_shaft_engineering_debits_money_and_reduces_clearance() -> void:
+	# Buying Shaft Engineering debits its money price and applies a 2-cell clearance reduction.
+	var econ := Economy.new(_tables)
+	var run := RunState.new(_tables, econ)
+	run.start_dig()
+	var price: int = int(Registry.upgrade(_tables, "shaft_engineering").get("price", 0))
+	_give_money(econ, price)
+	var before: int = econ.money
+	assert_bool(run.buy_money_upgrade("shaft_engineering")).is_true()
+	assert_int(econ.money).is_equal(before - price)
+	assert_int(run.upgrade_level("shaft_engineering")).is_equal(1)
+	assert_int(run.shaft_width_reduction()).is_equal(2)
+	# The effective clearance narrows 9 → 7 with this reduction.
+	assert_int(Registry.effective_shaft_width(_tables, run.shaft_width_reduction())).is_equal(7)
+
+func test_money_upgrade_respects_max_level() -> void:
+	# Shaft Engineering is max_level 1 — a second buy is rejected even with money.
+	var econ := Economy.new(_tables)
+	var run := RunState.new(_tables, econ)
+	run.start_dig()
+	_give_money(econ, 100000)
+	assert_bool(run.buy_money_upgrade("shaft_engineering")).is_true()
+	assert_bool(run.buy_money_upgrade("shaft_engineering")).is_false()
+	assert_int(run.upgrade_level("shaft_engineering")).is_equal(1)
+
+func test_select_next_noop_with_only_free_charge() -> void:
+	# Tab cycle: with only the free charge in the tray, select_next is a no-op returning the free id.
+	var run := _make_run()
+	var free_id: String = Registry.free_charge_id(_tables)
+	assert_str(run.select_next()).is_equal(free_id)
+	assert_str(run.selected_id).is_equal(free_id)
+
+func test_select_next_wraps_over_free_and_finite() -> void:
+	# With finite charges present, select_next visits each distinct slot once and wraps to free.
+	var econ := Economy.new(_tables)
+	var run := RunState.new(_tables, econ)
+	run.start_dig()
+	_give_money(econ, 100000)
+	var pack_id: String = Registry.pack_ids(_tables)[0]
+	assert_bool(run.buy_pack(pack_id)).is_true()
+	var slots: int = run.tray.size()  # >= 2 (free + finite)
+	# Cycling `distinct slot count` times returns to the starting selection.
+	var distinct: Array = []
+	for id in run.tray:
+		if not distinct.has(id):
+			distinct.append(id)
+	var start: String = run.selected_id
+	for i in range(distinct.size()):
+		run.select_next()
+	assert_str(run.selected_id).is_equal(start)
+
+func test_buy_pack_auto_selects_lowest_rarity_granted() -> void:
+	# Buying a pack readies the LOWEST-rarity charge it granted (not whatever was selected before).
+	var econ := Economy.new(_tables)
+	var run := RunState.new(_tables, econ)
+	run.start_dig()
+	_give_money(econ, 100000)
+	var pack_id: String = Registry.pack_ids(_tables)[0]
+	assert_bool(run.buy_pack(pack_id)).is_true()
+	var sel_rank: int = Registry.rarity_rank(_tables, str(Registry.explosive(_tables, run.selected_id).get("rarity", "")))
+	# No granted finite charge has a strictly lower rarity than the selected one.
+	for id in run.tray:
+		if id == Registry.free_charge_id(_tables):
+			continue
+		var r: int = Registry.rarity_rank(_tables, str(Registry.explosive(_tables, str(id)).get("rarity", "")))
+		assert_int(sel_rank).is_less_equal(r)
+
+func test_money_upgrade_resets_each_dig() -> void:
+	# Per-dig: the upgrade level (and its reduction) reset at the next start_dig.
+	var econ := Economy.new(_tables)
+	var run := RunState.new(_tables, econ)
+	run.start_dig()
+	_give_money(econ, 100000)
+	assert_bool(run.buy_money_upgrade("shaft_engineering")).is_true()
+	assert_int(run.shaft_width_reduction()).is_equal(2)
+	run.start_dig()  # new dig
+	assert_int(run.upgrade_level("shaft_engineering")).is_equal(0)
+	assert_int(run.shaft_width_reduction()).is_equal(0)

@@ -98,18 +98,21 @@ func test_air_blocks_have_zero_hp() -> void:
 	assert_int(Registry.block_max_hp(_tables, "air")).is_equal(0)
 	assert_int(Registry.scaled_block_hp(_tables, "air", 100, 3.0)).is_equal(0)
 
-func test_grid_uses_wide_bounded_mine_dimensions() -> void:
+func test_grid_uses_wide_infinite_mine_dimensions() -> void:
+	# UNIT MAPGEN: the shaft has finite width but is INFINITE in depth (mine_height_cells 0).
 	var grid := _make_grid()
 	assert_int(grid.mine_width).is_equal(Registry.mine_width_cells(_tables))
-	assert_int(grid.mine_height).is_equal(Registry.mine_height_cells(_tables))
+	assert_int(grid.mine_height).is_equal(Registry.mine_height_cells(_tables))  # 0 = infinite
 	assert_int(grid.shaft_width).is_equal(Registry.shaft_width(_tables))
 	grid.ensure_chunk(0)
 	assert_bool(grid.in_bounds(0, 0)).is_true()
-	assert_bool(grid.in_bounds(grid.mine_width - 1, grid.mine_height - 1)).is_true()
+	# Width is still bounded: x outside [0,width) is out of bounds.
 	assert_bool(grid.in_bounds(grid.mine_width, 0)).is_false()
-	assert_bool(grid.in_bounds(0, grid.mine_height)).is_false()
 	assert_int(grid.get_hp(grid.mine_width, 0)).is_equal(0)
 	assert_str(grid.get_block_id(grid.mine_width, 0)).is_equal("air")
+	# Depth is unbounded: an arbitrarily deep cell is still in bounds; only y < 0 is not.
+	assert_bool(grid.in_bounds(0, 100000)).is_true()
+	assert_bool(grid.in_bounds(0, -1)).is_false()
 
 # ── Damage reduces HP (AC-5.2.1, AC-5.2.7) ──────────────────────────────
 
@@ -262,23 +265,23 @@ func test_update_window_loads_missing_chunks() -> void:
 	assert_int(grid.loaded_chunk_count()).is_equal(3)  # chunks 1, 2, 3
 
 func test_window_resident_count_bounded_regardless_of_depth() -> void:
-	# AC-5.1.2: resident cell count stays bounded as the player descends through the
-	# finite mine. Near or beyond the floor, the window clamps instead of inventing chunks.
+	# AC-5.1.2 (UNIT MAPGEN infinite descent): resident chunk count stays bounded at
+	# (2*half+1) as the player descends through the UNBOUNDED shaft — there is no floor, so
+	# the window always loads exactly the sliding window, however deep, never inventing more.
 	var grid := _make_grid()
+	assert_bool(grid.mine_height <= 0).override_failure_message(
+		"this test asserts the infinite-shaft residency bound; mine_height should be the 0 sentinel"
+	).is_true()
 	var half := 2
 	var expected := 2 * half + 1
-	var max_chunk: int = grid.cell_to_chunk(grid.mine_height - 1)
-	for center in [3, 20, max_chunk - 1, max_chunk + 10]:
+	for center in [3, 20, 1000, 100000]:
 		grid.update_window(center, half)
 		assert_int(grid.loaded_chunk_count()).override_failure_message(
-			"window at center %d must hold at most %d chunks" % [center, expected]
-		).is_less_equal(expected)
+			"window at center %d must hold exactly %d chunks (bounded residency, no floor)" % [center, expected]
+		).is_equal(expected)
+		# Every resident chunk is inside [center-half, center+half] — no stragglers.
 		for loaded in grid.loaded_chunks():
-			assert_int(int(loaded)).override_failure_message(
-				"window at center %d loaded chunk beyond finite mine: %d > %d" % [
-					center, int(loaded), max_chunk
-				]
-			).is_less_equal(max_chunk)
+			assert_int(absi(int(loaded) - center)).is_less_equal(half)
 
 func test_unloaded_cell_returns_defaults() -> void:
 	# Accessing cells in unloaded chunks returns safe defaults.

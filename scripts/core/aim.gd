@@ -17,13 +17,20 @@ extends RefCounted
 ## Minimum drag distance (pixels) before angle changes. Below this → "no change".
 const DEAD_ZONE_PX := 10.0
 
-## Angle clamp range (radians). 0 = straight down, -PI/2 = left, PI/2 = right.
-## Aiming is allowed slightly past horizontal, including shallow upward angles.
-const MIN_ANGLE := -PI / 2.0 - 0.35  # ~-1.92 rad (shallow upward left)
-const MAX_ANGLE := PI / 2.0 + 0.35   # ~1.92 rad (shallow upward right)
+## Full 360° aim (v0.5): the angle is unrestricted. 0 = straight down, -PI/2 = left, +PI/2 = right,
+## ±PI = straight up. The player may aim ANY direction including upward (a forgiving lob). The angle
+## is kept normalized to (-PI, PI] (atan2's natural range) — there is no directional clamp anymore;
+## these bounds exist only so the keyboard glide / set_angle paths can wrap instead of saturate.
+const MIN_ANGLE := -PI  # straight up (wraps to MAX_ANGLE)
+const MAX_ANGLE := PI    # straight up
 
 ## Default angle (straight down).
 const DEFAULT_ANGLE := 0.0
+
+## Wrap an angle into (-PI, PI] so the full-circle aim never accumulates past one turn (forgiving:
+## no hard stop at the top — passing straight up wraps continuously left↔right).
+static func wrap_angle(angle: float) -> float:
+	return wrapf(angle, -PI, PI)
 
 ## Compute the launch angle from a drag gesture.
 ## start: where the drag began (screen coords).
@@ -43,10 +50,26 @@ static func angle_from_drag(start: Vector2, current: Vector2, current_angle: flo
 	# atan2 with x as the horizontal offset, y pointing down.
 	# We want: drag right = positive angle, drag left = negative angle.
 	# delta.x > 0 = dragging right, delta.y > 0 = dragging down.
-	var angle: float = atan2(delta.x, delta.y)
+	# atan2 already yields (-PI, PI] — the FULL 360° range (v0.5: aim any direction, incl. up).
+	# No clamp: the drag direction is honored exactly, so an upward drag aims upward.
+	return atan2(delta.x, delta.y)
 
-	# Clamp to valid range.
-	return clampf(angle, MIN_ANGLE, MAX_ANGLE)
+## Nudge the launch angle from a held keyboard direction (D1, AC-5.3.1/5.3.2).
+## `current_angle`: the angle in radians before this frame (0 = straight down).
+## `dir`: held-direction sign — -1 = aim_left, +1 = aim_right, 0 = nothing held (no change).
+## `deg_per_sec`: the data-driven keyboard aim speed (balance.feel.keyboard_aim_deg_per_sec).
+## `delta`: the frame time in seconds.
+## Returns the new angle, advanced by `dir * deg_per_sec * delta` (converted to radians) and WRAPPED
+## into (-PI, PI] — the SAME full-360° range the drag path uses (v0.5: aim any direction, incl. up).
+## Holding a direction glides continuously around the circle (no hard stop at straight-up). Smooth +
+## frame-rate independent (scales with delta) and forgiving (no precision/timing requirement —
+## AC-5.3.2): the angle just glides while a key is held. Pure; no Node deps; headless-testable (key
+## events don't fire headless, so this is what the unit tests drive — the spec's "test input math" rule).
+static func keyboard_angle_step(current_angle: float, dir: int, deg_per_sec: float, delta: float) -> float:
+	if dir == 0 or deg_per_sec <= 0.0 or delta <= 0.0:
+		return wrap_angle(current_angle)
+	var step_rad: float = deg_to_rad(deg_per_sec * delta) * signf(float(dir))
+	return wrap_angle(current_angle + step_rad)
 
 ## Convert a launch angle to a direction vector (unit vector).
 ## Angle 0 = straight down = Vector2(0, 1).

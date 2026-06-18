@@ -37,6 +37,7 @@ const CHARGE_TRAIL_SCENE := preload("res://scenes/charge_trail.tscn")
 const MUZZLE_FLASH_SCENE := preload("res://scenes/muzzle_flash.tscn")
 const VALUE_POPUP_SCENE := preload("res://scenes/value_popup.tscn")
 const COIN_PICKUP_SCENE := preload("res://scenes/coin_pickup.tscn")
+const DEBUG_OVERLAY_SCRIPT := preload("res://scripts/ui/debug_overlay.gd")
 const CHUNK_WINDOW_HALF := 3
 ## Floor on cosmetic explosion particles at the lowest motion-intensity setting — keeps the
 ## detonation readable (a minimal puff) for reduced-motion players without disabling the cue
@@ -49,10 +50,11 @@ const EXPLOSION_MOTION_FLOOR := 0.12
 # ── Authored node references (resolved in _ready from mine.tscn) ───────────────
 @onready var _block_layer: TileMapLayer = get_node_or_null("BlockGrid/BlockLayer")
 @onready var _crack_layer: TileMapLayer = get_node_or_null("BlockGrid/CrackLayer")
-@onready var _shaft_guide: ShaftGuide = get_node_or_null("ShaftGuide")
+@onready var _shaft_supports: ShaftSupports = get_node_or_null("ShaftSupports")
+@onready var _sky: Sprite2D = get_node_or_null("Sky")
 @onready var _light_mask: ColorRect = get_node_or_null("LightMaskLayer/LightMask")
 @onready var _platform: Platform = get_node_or_null("Platform")
-@onready var _preview_line: Line2D = get_node_or_null("AimPreview")
+@onready var _preview_line: AimLine = get_node_or_null("AimPreview")
 @onready var _aim_reticle: Sprite2D = get_node_or_null("AimReticle")
 @onready var _hud: Hud = get_node_or_null("Hud")
 @onready var _tray: TrayUi = get_node_or_null("Hud/Bottom/TrayScroll/Tray")
@@ -60,12 +62,14 @@ const EXPLOSION_MOTION_FLOOR := 0.12
 @onready var _cooldown_fill: ColorRect = get_node_or_null("Hud/Bottom/ThrowButton/CooldownFill")
 @onready var _cooldown_label: Label = get_node_or_null("Hud/Bottom/ThrowButton/CooldownLabel")
 @onready var _buy_pack_button: Button = get_node_or_null("Hud/Bottom/BuyPackButton")
+@onready var _mine_select_button: Button = get_node_or_null("Hud/Bottom/MinesButton")
 @onready var _elevator_up: Button = get_node_or_null("Hud/ElevatorControls/ElevatorUp")
 @onready var _elevator_down: Button = get_node_or_null("Hud/ElevatorControls/ElevatorDown")
 @onready var _dig_end_panel: DigEndPanel = get_node_or_null("Hud/DigEndPanel")
 @onready var _overlay: SettingsOverlay = get_node_or_null("Overlay")
 @onready var _prestige_offer: PrestigeOffer = get_node_or_null("PrestigeOffer")
 @onready var _shop_modal: ShopModal = get_node_or_null("ShopModal")
+@onready var _mine_select: MineSelect = get_node_or_null("MineSelect")
 
 # ── Systems (delegated logic; no Node deps) ───────────────────────────────────
 var _tables: Dictionary
@@ -74,8 +78,12 @@ var _economy: Economy
 var _run_state: RunState
 var _aim: AimController
 var _throw_controls: ThrowControls
+## The throw button's resting label ("THROW"), stashed while the cooldown countdown is shown so the
+## two don't overlap. Restored the frame the cooldown readies.
+var _throw_button_label: String = ""
 var _save: SaveManager
 var _settings: SettingsState
+var _debug_overlay: DebugOverlay
 
 # ── Per-throw transient state ─────────────────────────────────────────────────
 var _active_charge: Charge = null
@@ -88,6 +96,19 @@ var _active_popups: int = 0
 ## still land in the rolling count-up. Decremented when each coin's ttl frees it.
 var _active_coins: int = 0
 
+# ── Elevator hold-to-move ramp (continuous row-by-row glide while held) ────────
+## Pure ramp integrators (one per direction) that turn held time into whole-row steps. Holding the
+## up/down BUTTON or the up/down KEY moves the platform CONTINUOUSLY — row by row — ramping from a
+## slow start to a capped max (constants in /data, balance.elevator). A tap moves exactly one row
+## (the ramp's first-frame guarantee); a long hold glides faster and faster up to the cap. Both are
+## reset on release / when the held direction flips, so the next press starts slow again. The actual
+## per-row move still goes through the SAME _on_elevator_up()/_on_elevator_down() the tap path uses,
+## so the can_move_up/can_move_down clamps and depth sync are shared (one code path).
+var _ramp_up := ElevatorRamp.new()
+var _ramp_down := ElevatorRamp.new()
+## The direction held LAST frame (-1 up / +1 down / 0 none) — so a direction flip resets the ramp.
+var _elevator_held_dir: int = 0
+
 # ── Layout (all from /data) ───────────────────────────────────────────────────
 var _bps: int = 64
 var _mine_w: int = 7
@@ -96,6 +117,16 @@ var _shaft_w: int = 7
 var _shaft_left: int = 0
 var _chunk_h: int = 16
 var _fuzz_pct: float = 0.0
+
+# ── Mines (session state; no disk persistence — resets on app restart) ────────
+## Which mines the player has unlocked this session (id -> true). The starting mine is
+## always unlocked; deeper mines are unlocked by paying their access cost in the mine-select.
+var _unlocked_mines: Dictionary = {}
+## The mine the NEXT _start_dig() will build. Reset to the home mine at each dig start so a
+## Deep Mine run is one dig, then play returns to the home mine (re-enter via mine-select).
+var _selected_mine_id: String = ""
+## The mine the currently-built grid belongs to (so _start_dig only rebuilds on a change).
+var _active_mine_id: String = ""
 
 # ── Fuzzy-blast RNG (injected into Blast.resolve). Run-scoped + reseeded each dig
 # so a dig's blasts are reproducible from the run seed (AC-5.2.3/5.2.4). ──────────
@@ -146,6 +177,14 @@ func boot() -> void:
 		# Headless callers that instanced the scene before GameData loaded: load now.
 		GameData.load_all()
 		_tables = GameData.tables
+	# Init-order safety: if data STILL failed to load (a missing/corrupt /data dir), leave evidence
+	# on disk before the downstream systems start reading defaults — otherwise a field failure
+	# surfaces as a confusing null/zero far from the cause. Logger may not be wired yet under some
+	# boot orders, so look it up defensively. Behavior is unchanged (we proceed on /data defaults).
+	if _tables.is_empty():
+		var logger: Node = get_node_or_null("/root/GameLog")
+		if logger != null and logger.has_method("report_warning"):
+			logger.call("report_warning", "Mine", "boot: GameData tables empty — running on /data defaults")
 
 	_bps = Registry.block_pixel_size(_tables)
 	_mine_w = Registry.mine_width_cells(_tables)
@@ -156,20 +195,26 @@ func boot() -> void:
 	_fuzz_pct = float(Registry.balance(_tables, "blast_fuzz_pct", 0.0))
 
 	_economy = Economy.new(_tables)
-	_grid = BlockGrid.new(_tables, Registry.run_seed(_tables))
 	_run_state = RunState.new(_tables, _economy)
+	# Mines (session state): the home mine is always unlocked + selected; deeper mines are
+	# unlocked by paying their access cost in the mine-select. Build the home mine's grid.
+	_selected_mine_id = Registry.default_mine_id(_tables)
+	_unlocked_mines = {_selected_mine_id: true}
+	_build_grid_for(_selected_mine_id)
 	# Restore persisted progression (prestige points + purchases) so power growth survives an app
 	# restart (AC-5.11.1). Per-dig state is not saved. A fresh game / corrupt save loads a clean default.
 	_save = SaveManager.new()
 	var loaded: Dictionary = _save.load_state()
 	_run_state.prestige.from_state(loaded.get("prestige", {}))
 	# Settings (AC-5.10.1 / AC-5.11.1): a returning player's saved settings overlay the /data
-	# defaults; a fresh game seeds purely from the /data defaults (balance.settings).
+	# defaults; a fresh game seeds purely from the /data defaults (balance.settings). The keybind
+	# DEFAULTS are read from the LIVE InputMap (the project bindings) — never code literals — so a
+	# fresh game / an action absent from the save inherits the shipped key.
+	var default_binds: Dictionary = _input_map_defaults()
 	if _save.has_save():
-		_settings = SettingsState.from_state(loaded.get("settings", {}), _tables)
+		_settings = SettingsState.from_state(loaded.get("settings", {}), _tables, default_binds)
 	else:
-		_settings = SettingsState.from_defaults(_tables)
-	_grid.relic_collected.connect(_on_relic_collected)
+		_settings = SettingsState.from_defaults(_tables, default_binds)
 
 	_build_atlas_mapping()
 	_apply_generated_art()
@@ -177,6 +222,7 @@ func boot() -> void:
 	_wire_throw_controls()
 	_wire_ui()
 	_wire_overlay()
+	_wire_debug_overlay()
 	_wire_world_guides()
 	_apply_settings()
 
@@ -259,11 +305,11 @@ func _wire_ui() -> void:
 		# Big "End Dig" button mirrors the prestige offer for mouse/touch parity.
 		if not _hud.end_dig_pressed.is_connected(_on_end_dig_pressed):
 			_hud.end_dig_pressed.connect(_on_end_dig_pressed)
-		# Elevator arrows manually move the platform up/down.
-		if not _hud.elevator_up_pressed.is_connected(_on_elevator_up):
-			_hud.elevator_up_pressed.connect(_on_elevator_up)
-		if not _hud.elevator_down_pressed.is_connected(_on_elevator_down):
-			_hud.elevator_down_pressed.connect(_on_elevator_down)
+		# Elevator arrows manually move the platform up/down. Movement is driven by the HOLD poll in
+		# _process (_process_elevator_hold) — holding the button glides the platform continuously,
+		# ramping to a capped speed; a tap moves one row. The `pressed` signal is intentionally NOT
+		# wired to a move here (that would double-fire with the hold poll on release); the poll's
+		# first-frame guarantee covers the tap. The signal stays emitted for any other listeners.
 	if _platform != null:
 		if not _platform.descended.is_connected(_on_platform_descended):
 			_platform.descended.connect(_on_platform_descended)
@@ -275,6 +321,8 @@ func _wire_ui() -> void:
 		_throw_button.pressed.connect(_on_throw_button)
 	if _buy_pack_button != null and not _buy_pack_button.pressed.is_connected(_on_buy_pack_button):
 		_buy_pack_button.pressed.connect(_on_buy_pack_button)
+	if _mine_select_button != null and not _mine_select_button.pressed.is_connected(_on_mine_select_button):
+		_mine_select_button.pressed.connect(_on_mine_select_button)
 	if _dig_end_panel != null:
 		_dig_end_panel.configure(_tables)  # data-driven pop-in duration
 		if not _dig_end_panel.buy_upgrade_pressed.is_connected(_on_panel_buy_upgrade):
@@ -288,9 +336,25 @@ func _wire_ui() -> void:
 		if not _prestige_offer.declined.is_connected(_on_prestige_declined):
 			_prestige_offer.declined.connect(_on_prestige_declined)
 	if _shop_modal != null:
-		_shop_modal.configure(_tables, func() -> int: return _economy.money)
+		_shop_modal.configure(
+			_tables,
+			func() -> int: return _economy.money,
+			func(id: String) -> int: return _run_state.upgrade_level(id),
+		)
 		if not _shop_modal.buy_pressed.is_connected(_on_shop_buy_pressed):
 			_shop_modal.buy_pressed.connect(_on_shop_buy_pressed)
+		if not _shop_modal.buy_upgrade_pressed.is_connected(_on_shop_buy_upgrade):
+			_shop_modal.buy_upgrade_pressed.connect(_on_shop_buy_upgrade)
+	if _mine_select != null:
+		_mine_select.configure(
+			_tables,
+			func() -> int: return _economy.money,
+			func(id: String) -> bool: return _unlocked_mines.has(id),
+		)
+		if not _mine_select.unlock_pressed.is_connected(_on_mine_unlock_pressed):
+			_mine_select.unlock_pressed.connect(_on_mine_unlock_pressed)
+		if not _mine_select.enter_pressed.is_connected(_on_mine_enter_pressed):
+			_mine_select.enter_pressed.connect(_on_mine_enter_pressed)
 
 
 ## Bind the modal Settings overlay (AC-5.8.3) to the shared SettingsState and listen for changes.
@@ -300,10 +364,35 @@ func _wire_overlay() -> void:
 	_overlay.configure(_tables, _settings)
 	if not _overlay.settings_changed.is_connected(_on_settings_changed):
 		_overlay.settings_changed.connect(_on_settings_changed)
+	if not _overlay.keybind_rebound.is_connected(_on_keybind_rebound):
+		_overlay.keybind_rebound.connect(_on_keybind_rebound)
+
+
+## Attach the toggleable debug overlay (UNIT INFRA), bound to the F3 `toggle_debug` action. Built in
+## code (no authored .tscn) and added as a child so it lives + draws over the level. Idempotent — only
+## ever creates one (a re-boot reuses the existing instance). Read-only: it never mutates game state.
+func _wire_debug_overlay() -> void:
+	if _debug_overlay == null:
+		_debug_overlay = DEBUG_OVERLAY_SCRIPT.new()
+		_debug_overlay.name = "DebugOverlay"
+		add_child(_debug_overlay)
+	_debug_overlay.bind_mine(self)
 
 func _wire_world_guides() -> void:
-	if _shaft_guide != null:
-		_shaft_guide.configure(_tables)
+	if _shaft_supports != null:
+		_shaft_supports.configure(_tables, _shaft_left, _shaft_w)
+		if not _shaft_supports.support_reached.is_connected(_on_support_reached):
+			_shaft_supports.support_reached.connect(_on_support_reached)
+	if _sky != null and _sky.texture != null:
+		# Cover the sky band [-sky_px, 0] across the full mine width, centered on the mine, so
+		# the surface reads as a horizon. Sprite2D is centered, so place the center at the band
+		# midpoint and scale the texture to the target rectangle (derived from the real texture size).
+		var sky_px: float = float(Registry.balance(_tables, "sky_band_cells", 40)) * float(_bps)
+		var mine_w_px: float = float(_mine_w * _bps)
+		var tex: Vector2 = _sky.texture.get_size()
+		_sky.centered = true
+		_sky.position = Vector2(mine_w_px * 0.5, -sky_px * 0.5)
+		_sky.scale = Vector2(mine_w_px / maxf(1.0, tex.x), sky_px / maxf(1.0, tex.y))
 	if _light_mask != null:
 		var mat := _light_mask.material as ShaderMaterial
 		if mat != null:
@@ -358,39 +447,197 @@ func _on_elevator_down() -> void:
 		_refresh_all_ui()
 
 
+## The elevator direction currently HELD via the on-screen buttons or the up/down KEY (-1 up,
+## +1 down, 0 none/both). Polled each frame so HOLDING moves continuously. Buttons take precedence
+## via is_pressed() (true while a normal button is held); the keyboard actions are also honored so
+## the keyboard is the same continuous path. Pressing both directions cancels (0). Headless-safe:
+## buttons may be null and the InputMap actions may be absent.
+func _elevator_input_dir() -> int:
+	var dir: int = 0
+	# On-screen buttons (held). A hidden button (the direction you can't go) is never "pressed".
+	if _elevator_up != null and _elevator_up.visible and _elevator_up.is_pressed():
+		dir -= 1
+	if _elevator_down != null and _elevator_down.visible and _elevator_down.is_pressed():
+		dir += 1
+	# Keyboard (held). Skipped in the editor; guarded on the actions existing.
+	if not Engine.is_editor_hint():
+		if InputMap.has_action("elevator_up") and Input.is_action_pressed("elevator_up"):
+			dir -= 1
+		if InputMap.has_action("elevator_down") and Input.is_action_pressed("elevator_down"):
+			dir += 1
+	return signi(dir)
+
+
+## Continuous hold-to-move (called every frame from _process). Reads the held direction, ramps the
+## speed (slow start → capped max, all /data), and steps that many WHOLE rows this frame through the
+## SAME single-row _on_elevator_up()/_on_elevator_down() the tap path uses (so the can_move clamps +
+## depth sync are shared). Respects can_move_up/can_move_down (a row that can't move just stops the
+## glide). No-op while the tree is paused (a modal is open) or the dig has ended; releasing (or a
+## direction flip) resets the ramp so the next press starts slow again.
+func _process_elevator_hold(delta: float) -> void:
+	if _platform == null:
+		_reset_elevator_ramps()
+		return
+	if _tree_paused() or (_run_state != null and _run_state.dig_ended):
+		_reset_elevator_ramps()
+		return
+	var dir: int = _elevator_input_dir()
+	# A direction change (incl. release to 0, or a flip) resets BOTH ramps so the new hold starts slow.
+	if dir != _elevator_held_dir:
+		_reset_elevator_ramps()
+		_elevator_held_dir = dir
+	if dir == 0:
+		return
+	if not may_move_elevator(dir, _can_move_up(), _can_move_down(), _tree_paused()):
+		# Can't move that way (at a limit) — hold the ramp reset so re-aiming starts fresh.
+		_reset_elevator_ramps()
+		return
+	var ramp: ElevatorRamp = _ramp_up if dir < 0 else _ramp_down
+	var rows: int = ramp.advance(
+		delta,
+		Registry.elevator_start_rows_per_sec(_tables),
+		Registry.elevator_accel_rows_per_sec2(_tables),
+		Registry.elevator_max_rows_per_sec(_tables),
+	)
+	for _i in range(rows):
+		# Re-check the limit before EACH row so a glide stops cleanly at the top/support boundary.
+		if not may_move_elevator(dir, _can_move_up(), _can_move_down(), _tree_paused()):
+			break
+		if dir < 0:
+			_on_elevator_up()
+		else:
+			_on_elevator_down()
+
+
+func _reset_elevator_ramps() -> void:
+	_ramp_up.reset()
+	_ramp_down.reset()
+	_elevator_held_dir = 0
+
+
 ## Platform target row changed (auto-descent or manual elevator move): refresh UI so the
 ## elevator arrows gray at the top/bottom limits and the depth readout stays in sync.
 func _on_platform_descended(_new_row: int) -> void:
 	_refresh_all_ui()
 
 
-## A setting changed in the overlay: apply it live (audio/HUD/explosion) and persist it (AC-5.11.4).
+## A setting changed in the overlay: apply it live (audio/HUD/InputMap) and persist it (AC-5.11.4).
 func _on_settings_changed() -> void:
 	_apply_settings()
 	_save_progress()
 
 
+## A keybind capture committed a new key for `action` (the overlay already wrote the SettingsState
+## and fires settings_changed too). Mirror just that one action into the live InputMap right away so
+## the rebind takes effect mid-dig without waiting for the full _apply_settings pass.
+func _on_keybind_rebound(action: String, keycode: int) -> void:
+	apply_keybinds_to_input_map({action: keycode})
+
+
 ## Push the current SettingsState into the systems it drives: SFX/Music bus volume now (AC-5.10.1 /
-## AC-5.13.2); the HUD text scale + the explosion motion intensity are applied at their sites
-## (_render/_spawn) and on the HUD directly. Safe to call repeatedly (idempotent).
+## AC-5.13.2); the HUD text scale; the keybinds into the live InputMap (so the keyboard path honors a
+## rebind immediately); and the elevator-controls SIDE into the HUD (left/right layout). The explosion
+## motion intensity is read at its spawn site. Safe to call repeatedly (idempotent).
 func _apply_settings() -> void:
 	if _settings == null:
 		return
 	Audio.set_sfx_volume_db(_settings.sfx_volume_db())
 	Audio.set_music_volume_db(_settings.music_volume_db())
+	apply_keybinds_to_input_map(_settings.keybinds())
 	if _hud != null:
 		_hud.set_text_scale(_settings.text_scale)
+		_hud.set_elevator_side(_settings.elevator_side)
+
+
+## Read the current default keycode for each rebindable action from the live InputMap (the project
+## bindings). Returns {action: physical-keycode int}. Used to seed the SettingsState keybind defaults
+## so they come from the project map, not code. Skips actions with no key event bound.
+func _input_map_defaults() -> Dictionary:
+	var out: Dictionary = {}
+	for action in SettingsState.KEYBIND_ACTIONS:
+		if not InputMap.has_action(action):
+			continue
+		for ev in InputMap.action_get_events(action):
+			if ev is InputEventKey:
+				var key := ev as InputEventKey
+				var kc: int = key.physical_keycode if key.physical_keycode != 0 else key.keycode
+				if kc > 0:
+					out[action] = kc
+					break
+	return out
+
+
+## Apply a {action: physical-keycode int} keybind map to the live InputMap (AC-5.10.1 rebindable
+## controls). For each known action present in the map, the action's key event(s) are replaced by a
+## single InputEventKey on that physical keycode — so the held-aim / fire / elevator keyboard path
+## (which checks these same actions) immediately uses the rebound key. Static + InputMap-only so the
+## rebind→InputMap behavior is headless-testable (injected key EVENTS don't fire, but this rewrites
+## the map directly). Unknown actions and non-positive keycodes are ignored.
+static func apply_keybinds_to_input_map(binds: Dictionary) -> void:
+	for action in SettingsState.KEYBIND_ACTIONS:
+		if not binds.has(action):
+			continue
+		var keycode: int = int(binds[action])
+		if keycode <= 0 or not InputMap.has_action(action):
+			continue
+		# Drop only this action's KEY events (leave any non-key events — none today — intact), then
+		# add the single rebound physical key.
+		for ev in InputMap.action_get_events(action):
+			if ev is InputEventKey:
+				InputMap.action_erase_event(action, ev)
+		var new_ev := InputEventKey.new()
+		new_ev.physical_keycode = keycode
+		InputMap.action_add_event(action, new_ev)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DIG LIFECYCLE
 # ══════════════════════════════════════════════════════════════════════════════
 
+## Build (or rebuild) the terrain grid for `mine_id`: a per-mine seed offset gives each mine a
+## distinct layout + relic placement, the mine's hardness scales block HP, its ore multiplier
+## scales credits, and its tint darkens the terrain view. Reconnects the relic signal onto the
+## fresh grid. Called at boot (home mine) and whenever _start_dig enters a different mine.
+func _build_grid_for(mine_id: String) -> void:
+	var grid_seed: int = Registry.run_seed(_tables) + Registry.mine_seed_offset(_tables, mine_id)
+	_grid = BlockGrid.new(_tables, grid_seed, Registry.mine_hardness_mult(_tables, mine_id))
+	_grid.relic_collected.connect(_on_relic_collected)
+	_economy.set_ore_value_mult(Registry.mine_ore_value_mult(_tables, mine_id))
+	if _block_layer != null:
+		_block_layer.modulate = Registry.mine_tile_tint(_tables, mine_id)
+	_active_mine_id = mine_id
+
+
 func _start_dig() -> void:
 	_run_state.start_dig()
+	# Enter the selected mine (rebuild the grid only when it differs from the active one). The
+	# ore multiplier is re-applied here because start_dig → reset_run resets money; the mult and
+	# tint persist for whichever mine this dig is in.
+	if _selected_mine_id != _active_mine_id:
+		_build_grid_for(_selected_mine_id)
+	else:
+		_economy.set_ore_value_mult(Registry.mine_ore_value_mult(_tables, _active_mine_id))
+	# Per "back to the home mine after the relic": the next dig defaults home; re-enter a deeper
+	# mine via the mine-select (its unlock persists for the session).
+	_selected_mine_id = Registry.default_mine_id(_tables)
 	# Reproducible fuzzy blasts: reseed the run-scoped blast RNG from the run seed each
 	# dig so a dig is reproducible (AC-5.2.3/5.2.4 — fixed seed → fixed result).
 	_blast_rng.seed = Registry.run_seed(_tables)
+	# Per-dig money upgrades reset with the dig; reset the shaft clearance back to base width.
+	_recompute_shaft()
+	# UNIT INFRA (crash-triage #2): if a charge is somehow still alive when a dig (re)starts — e.g.
+	# a rebuild raced an in-flight throw — free it FIRST. A stale Charge node still emits `detonated`
+	# into _on_charge_detonated and would resolve a blast against the fresh grid at a stale cell.
+	# queue_free + nulling the ref is idempotent and behavior-neutral on the normal path (no charge).
+	if is_instance_valid(_active_charge):
+		(_active_charge as Node).queue_free()
+		var logger: Node = get_node_or_null("/root/GameLog")
+		if logger != null and logger.has_method("report_warning"):
+			logger.call("report_warning", "Mine", "start_dig freed a stale in-flight charge")
 	_active_charge = null
+	# UNIT INFRA (crash-triage #6): defensively restore time_scale. A hit-stop coroutine ALWAYS
+	# restores it, but if its node was freed mid-await (a scene change during the freeze) the restore
+	# line never ran and the next dig would boot frozen. Idempotent — a no-op on the normal path.
+	Engine.time_scale = 1.0
 	if _aim != null:
 		_aim.reset_angle()
 		_aim.set_enabled(true)
@@ -400,8 +647,7 @@ func _start_dig() -> void:
 		_dig_end_panel.hide_panel()
 	if _hud != null:
 		_hud.set_end_dig_visible(false)
-	_refresh_all_ui()
-	_update_preview()
+	_refresh_after_state_change()
 
 
 ## Called by BlockGrid when the relic cell breaks (AC-5.6.2). Marks the relic found,
@@ -496,18 +742,28 @@ func _update_preview() -> void:
 	if _run_state.dig_ended or _active_charge != null:
 		_clear_preview()
 		return
+	# Phase D: HIDE the aim arc + reticle while the platform/elevator or shaft-supports are MOVING
+	# (descending/extending) — the launch point is in motion, so a drawn arc would be a stale lie.
+	# Redrawn when they settle (_on_platform_descended / _on_support_reached re-call _update_preview).
+	if _aim_is_moving():
+		_clear_preview()
+		return
 	var params := ThrowParams.from_explosive(_tables, _run_state.selected_id)
 	var is_solid := func(cell: Vector2i) -> bool:
 		return _grid.is_solid(cell.x, cell.y)
 	var path: PackedVector2Array = _aim.preview_path(
 		params, _muzzle_position(), is_solid, 240, _bps
 	)
-	# Reset the cosmetic state the fade-out / a previous throw may have left dimmed.
+	# Reset the cosmetic state the fade-out / a previous throw may have left dimmed, and push the
+	# /data feel tunables onto the AimLine (it paints the dashes itself in _draw() — no shader/UV
+	# fragility; see reports/aim-line-method.md). The dash PERIOD is in along-line pixels, so it is
+	# stable as the arc's pixel length changes each frame.
 	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
-	_preview_line.self_modulate = Color(1, 1, 1, 1)
-	_preview_line.clear_points()
-	for p in path:
-		_preview_line.add_point(p)
+	_preview_line.dash_px = Registry.feel_f(_tables, "aim_dash_px", 18.0)
+	_preview_line.gap_px = Registry.feel_f(_tables, "aim_gap_px", 14.0)
+	_preview_line.line_color = Color(1, 1, 0.6, 0.85)  # the old Gradient_aim head color
+	_preview_line.alpha_mult = 1.0
+	_preview_line.set_points(path)
 	# Reticle: park it on the predicted first-bounce cell (the LAST preview point) while aiming,
 	# so the player sees exactly where the throw lands. Hidden once there is no aimable path.
 	if _aim_reticle != null:
@@ -522,9 +778,31 @@ func _update_preview() -> void:
 ## simply invalid (dig ended / charge in flight). The animated fade lives in _begin_aim_fade_out.
 func _clear_preview() -> void:
 	if _preview_line != null:
-		_preview_line.clear_points()
+		_preview_line.clear()
 	if _aim_reticle != null:
 		_aim_reticle.visible = false
+
+
+## True while the launch point is in motion: the platform descent tween is animating OR the shaft
+## supports are extending. The aim arc is hidden during this (Phase D) and redrawn when it settles.
+func _aim_is_moving() -> bool:
+	if _platform != null and _platform.is_descending:
+		return true
+	if _shaft_supports != null and _shaft_supports.is_extending:
+		return true
+	return false
+
+
+## The effective dash march speed: the /data aim_march_px, but GATED to 0 (a still pattern) when
+## motion intensity <= 0 (reduced motion) or while the tree is paused (a modal is open). Pure +
+## headless-callable so the gate is unit-testable without sampling shader pixels.
+func _aim_march_speed() -> float:
+	var motion: float = _settings.motion_intensity if _settings != null else 1.0
+	if motion <= 0.0:
+		return 0.0
+	if get_tree() != null and get_tree().paused:
+		return 0.0
+	return Registry.feel_f(_tables, "aim_march_px", 60.0)
 
 
 # ── Animated aim line: marching-dash scroll + throw fade-out (v0.5 arcade pass) ──
@@ -539,28 +817,26 @@ var _aim_dash_t: float = 0.0
 
 ## Per-frame cosmetic animation for the aim line + reticle, gated on `is_dragging` (so it costs
 ## nothing when not aiming) and on the motion-intensity accessibility setting (motion 0 → a still
-## line, no scroll/pulse — the reduced-motion contract). Tolerates pause implicitly: _process is
-## suspended while the tree is paused, so nothing here runs during the Settings overlay. Called from
-## the single _process (which also drives the light mask).
+## line, no march/pulse — the reduced-motion contract). The MARCHING DASH is the alive feedback: the
+## AimLine paints the dashes in _draw(); we advance its march phase by delta * the gated speed (the
+## gate zeroes the speed for reduced-motion / paused, so the dashes hold still but stay visible — no
+## shader TIME). _process is suspended while the tree is paused (the Settings overlay), so nothing
+## here runs during a modal — and the gate also zeroes the march. Called from _process.
 func _animate_aim_line(delta: float) -> void:
 	if _aim == null or not _aim.is_dragging:
 		return
 	if _preview_line == null:
 		return
+	# March the dashes toward the tip. The gate returns 0 for reduced motion / paused, and
+	# advance_march(0) holds the pattern still (still drawn, just not crawling).
+	_preview_line.advance_march(delta * _aim_march_speed())
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
 	if motion <= 0.0:
-		# Reduced motion: hold a static, fully-opaque line + steady reticle (no march/pulse).
-		_preview_line.self_modulate = Color(1, 1, 1, 1)
+		# Reduced motion: hold a steady reticle (the dash is already frozen by the march gate).
 		if _aim_reticle != null:
 			_aim_reticle.scale = Vector2(0.22, 0.22)
 		return
-	var scroll: float = Registry.feel_f(_tables, "aim_scroll_speed", 60.0)
-	_aim_dash_t += delta * scroll
-	# "Marching" aim feedback: a gentle opacity shimmer (driven by the data-tuned scroll speed) reads
-	# as a live, active aim line crawling toward the impact — without shipping a dash-texture asset.
-	# The gradient fade (muzzle → tip) is baked into the authored Line2D gradient.
-	var shimmer: float = 0.78 + 0.22 * sin(_aim_dash_t * 0.12)
-	_preview_line.self_modulate = Color(1, 1, 1, shimmer)
+	_aim_dash_t += delta * Registry.feel_f(_tables, "aim_scroll_speed", 60.0)
 	# Reticle pulse: a small breathing scale so the impact marker feels alive while aiming.
 	if _aim_reticle != null and _aim_reticle.visible:
 		var pulse: float = 0.22 * (1.0 + 0.18 * sin(_aim_dash_t * 0.16))
@@ -576,6 +852,112 @@ func _on_throw_button() -> void:
 	# scale tween — so the squash plays even though the throw immediately greys the button out.
 	_squash_throw_button()
 	throw_at(_aim.angle if _aim != null else 0.0)
+
+
+# ── Keyboard controls (D1) — a THIRD input path through the SAME logic (AC-5.3.7) ──
+# Held aim_left/aim_right glide the launch angle in _process; fire / elevator_up / elevator_down
+# are edge-triggered in _input. None of them introduce new game logic — fire routes through the
+# very same _on_throw_button() the on-screen button does, and the elevator keys call the same
+# _on_elevator_up()/_on_elevator_down() the arrows do. The guards below mirror the existing
+# button-disabled rules so the keyboard can never do something the buttons couldn't, and nothing
+# fires while the tree is paused (a modal/Settings overlay is open).
+
+## Pure guard: may a throw be committed right now? Mirrors the throw-button enabled rule + the
+## _on_throw_button → throw_at path (AC-5.3.3/5.3.8): not while the dig ended, not while a charge
+## is already in flight, not during the throw cooldown, and not while a modal pauses the tree.
+## Takes primitives so it is headless-testable (key events don't fire headless).
+static func may_fire(dig_ended: bool, charge_in_flight: bool, can_throw: bool, paused: bool) -> bool:
+	if paused:
+		return false
+	if dig_ended:
+		return false
+	if charge_in_flight:
+		return false
+	return can_throw
+
+## Pure guard: may the elevator move in `dir` (-1 up, +1 down) right now? Mirrors the elevator-arrow
+## disabled rule (AC-5.7.2): only when the platform reports it can move that way, and never while a
+## modal pauses the tree. `can_up`/`can_down` are Platform.can_move_up()/can_move_down().
+static func may_move_elevator(dir: int, can_up: bool, can_down: bool, paused: bool) -> bool:
+	if paused:
+		return false
+	if dir < 0:
+		return can_up
+	if dir > 0:
+		return can_down
+	return false
+
+
+## Edge-triggered keyboard actions (fire + elevator). Runs through the SAME handlers as the on-screen
+## buttons after the pure guards pass. Held-aim is in _process (Input.is_action_pressed), per the
+## "held in _process, edge in _input" split. Nothing here fires while the tree is paused (a modal is
+## open) — the guards check it, and the actions themselves no-op when their button rule isn't met.
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("fire"):
+		if _may_fire_now():
+			_on_throw_button()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("elevator_up") or event.is_action_pressed("elevator_down"):
+		# Elevator keys are handled by the HOLD poll in _process (_process_elevator_hold) so HOLDING
+		# the key glides the platform continuously (ramping to a capped speed), exactly like holding
+		# the on-screen button — a single shared continuous path. We only consume the press edge here
+		# so it doesn't fall through to another action; the poll does the actual row stepping.
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("cycle_charge"):
+		# Tab cycles the selected tray charge (free → each finite type → wrap). No-op while paused
+		# or after the dig ended. Routes through the same selection state the tray taps use.
+		if not _tree_paused() and not _run_state.dig_ended:
+			_run_state.select_next()
+			_refresh_after_state_change()
+		get_viewport().set_input_as_handled()
+
+
+## Held-aim direction this frame from the keyboard: -1 (aim_left), +1 (aim_right), 0 (none/both).
+## Pressing both cancels (no net nudge). Read in _process so the angle glides smoothly while held.
+func _keyboard_aim_dir() -> int:
+	if Engine.is_editor_hint():
+		return 0
+	if not (InputMap.has_action("aim_left") and InputMap.has_action("aim_right")):
+		return 0
+	var dir: int = 0
+	if Input.is_action_pressed("aim_left"):
+		dir -= 1
+	if Input.is_action_pressed("aim_right"):
+		dir += 1
+	return dir
+
+
+## Apply one frame of held-keyboard aim: nudge the AimController angle by the data-driven rate.
+## No-op while the tree is paused (a modal is open), the dig ended, a charge is in flight, or no key
+## is held. Uses the SAME AimController angle API the drag path mutates, so the preview + platform
+## look-ahead update through the existing angle_changed signal (one shared aim path, AC-5.3.1/5.3.7).
+func _apply_keyboard_aim(delta: float) -> void:
+	if _aim == null or _tree_paused():
+		return
+	if _run_state == null or _run_state.dig_ended or _active_charge != null:
+		return
+	var dir: int = _keyboard_aim_dir()
+	if dir == 0:
+		return
+	var rate: float = Registry.feel_f(_tables, "keyboard_aim_deg_per_sec", 90.0)
+	var next_angle: float = Aim.keyboard_angle_step(_aim.angle, dir, rate, delta)
+	if next_angle != _aim.angle:
+		_aim.set_angle(next_angle)
+
+
+# ── Thin instance-side reads feeding the pure guards (so the guards stay primitive + testable) ──
+func _tree_paused() -> bool:
+	return get_tree() != null and get_tree().paused
+
+func _can_move_up() -> bool:
+	return _platform != null and _platform.can_move_up()
+
+func _can_move_down() -> bool:
+	return _platform != null and _platform.can_move_down()
+
+func _may_fire_now() -> bool:
+	var can_throw: bool = _throw_controls.can_throw() if _throw_controls != null else (_active_charge == null)
+	return may_fire(_run_state.dig_ended, _active_charge != null, can_throw, _tree_paused())
 
 
 ## Live THROW-button squash tween (kept so a rapid second press restarts cleanly without stacking).
@@ -623,7 +1005,13 @@ func throw_at(angle: float) -> Charge:
 		return null
 	var params := ThrowParams.from_explosive(_tables, explosive_id)
 	var charge: Charge = CHARGE_SCENE.instantiate()
-	charge.setup(params, _muzzle_position(), _bps)
+	# The on_rest motion gate (data-driven): an on_rest charge may only resolve via the sleeping path
+	# after it has actually moved, so a freshly-launched body that reports sleeping=true on frame 0
+	# (before Rapier integrates the impulse) can't detonate in mid-air — the "sticky bomb explodes
+	# instantly" fix. Code-side floors apply when these keys are absent.
+	var min_airtime: float = float(Registry.balance(_tables, "charge_min_airtime_seconds", -1.0))
+	var min_travel: float = float(Registry.balance(_tables, "charge_min_travel_px", -1.0))
+	charge.setup(params, _muzzle_position(), _bps, min_airtime, min_travel)
 	charge.detonated.connect(_on_charge_detonated)
 	add_child(charge)
 	# Comet trail for a readable flight path + throw satisfaction (global-coords streak, web-safe COLOR).
@@ -690,13 +1078,13 @@ func _begin_aim_fade_out() -> void:
 		_clear_preview()
 		return
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
-	if motion <= 0.0 or _preview_line.get_point_count() == 0:
+	if motion <= 0.0 or _preview_line.point_count() == 0:
 		_clear_preview()
 		return
 	_aim_fading = true
 	var t := create_tween()
 	t.set_parallel(true)
-	t.tween_property(_preview_line, "self_modulate:a", 0.0, 0.18).set_ease(Tween.EASE_OUT)
+	t.tween_property(_preview_line, "alpha_mult", 0.0, 0.18).set_ease(Tween.EASE_OUT)
 	t.tween_property(_preview_line, "width", 0.0, 0.18).set_ease(Tween.EASE_OUT)
 	if _aim_reticle != null and _aim_reticle.visible:
 		t.tween_property(_aim_reticle, "modulate:a", 0.0, 0.18).set_ease(Tween.EASE_OUT)
@@ -710,7 +1098,7 @@ func _finish_aim_fade_out() -> void:
 	_aim_fading = false
 	_clear_preview()
 	if _preview_line != null:
-		_preview_line.self_modulate = Color(1, 1, 1, 1)
+		_preview_line.alpha_mult = 1.0
 		_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
 	if _aim_reticle != null:
 		_aim_reticle.modulate.a = 0.9
@@ -720,8 +1108,7 @@ func _finish_aim_fade_out() -> void:
 func select_charge(charge_id: String) -> bool:
 	var ok: bool = _run_state.select(charge_id)
 	if ok:
-		_refresh_all_ui()
-		_update_preview()
+		_refresh_after_state_change()
 	return ok
 
 
@@ -749,6 +1136,70 @@ func buy_pack(pack_id: String) -> bool:
 func _on_shop_buy_pressed(pack_id: String) -> void:
 	if buy_pack(pack_id) and _shop_modal != null:
 		_shop_modal.close()
+
+
+## A per-dig MONEY upgrade (Shaft Engineering) was bought from the shop. Debit + record
+## the level, apply it immediately (narrows the remaining descent), refresh the UI, and
+## keep the modal open (so the player can buy more / see it flip to OWNED). Returns true on
+## success. Resets next dig (per-dig, no persistence).
+func buy_money_upgrade(upgrade_id: String) -> bool:
+	if _run_state == null or not _run_state.buy_money_upgrade(upgrade_id):
+		return false
+	_recompute_shaft()
+	_check_descent()  # the narrower requirement may already clear a layer (grid is loaded mid-dig)
+	Audio.play_ore_credited()  # reuse the purchase/credit cue
+	_refresh_all_ui()
+	if _shop_modal != null:
+		_shop_modal.refresh()
+	return true
+
+
+func _on_shop_buy_upgrade(upgrade_id: String) -> void:
+	buy_money_upgrade(upgrade_id)
+
+
+# ── Mine select (dedicated screen; session unlock, money-gated) ───────────────
+
+## Open the mine-select screen (HUD button). Pauses the tree like the other modals.
+func _on_mine_select_button() -> void:
+	if _mine_select != null:
+		_mine_select.open(_motion_intensity())
+
+
+## Unlock access to `mine_id` by paying its one-time access cost from this dig's money. The
+## unlock persists for the session (no disk save). Returns true on success. Keeps the modal open.
+func unlock_mine(mine_id: String) -> bool:
+	if _unlocked_mines.has(mine_id):
+		return true
+	var cost: int = Registry.mine_access_cost(_tables, mine_id)
+	if not _economy.debit(cost):
+		return false
+	_unlocked_mines[mine_id] = true
+	Audio.play_ore_credited()
+	_refresh_all_ui()
+	if _mine_select != null:
+		_mine_select.refresh()
+	return true
+
+
+func _on_mine_unlock_pressed(mine_id: String) -> void:
+	unlock_mine(mine_id)
+
+
+## Enter `mine_id`: it becomes the mine the next dig builds, then a fresh dig starts in it.
+## Rejected if the mine is not unlocked (the UI should prevent this). Closes the modal.
+func enter_mine(mine_id: String) -> bool:
+	if not _unlocked_mines.has(mine_id):
+		return false
+	_selected_mine_id = mine_id
+	if _mine_select != null:
+		_mine_select.close()
+	_start_dig()
+	return true
+
+
+func _on_mine_enter_pressed(mine_id: String) -> void:
+	enter_mine(mine_id)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DETONATION → BLAST → CREDIT → DESCENT
@@ -857,8 +1308,7 @@ func resolve_blast(center_cell: Vector2i, params: ThrowParams) -> Dictionary:
 		_render_cell(cell.x, cell.y)
 
 	_check_descent()
-	_refresh_all_ui()
-	_update_preview()
+	_refresh_after_state_change()
 
 	# Hit-stop on a BIG break (>= vfx.hitstop_min_cells cleared) — a brief Engine.time_scale
 	# freeze that lands the "crunch". Free 1-cell taps never freeze. Fire-and-forget (NOT
@@ -869,37 +1319,88 @@ func resolve_blast(center_cell: Vector2i, params: ThrowParams) -> Dictionary:
 	return result
 
 
-## Count clears beneath the platform; if at threshold, descend (tweened) + re-window.
-## The platform node owns the tween + camera re-anchor (AC-5.7.2/5.7.3); this just feeds
-## it the HP grid and reacts to the descent.
+## After a blast, check whether the full shaft-width layer(s) below the current
+## support depth are cleared. If so, extend the supports down to the deepest
+## consecutive cleared layer; the platform will follow when the support animation
+## emits `support_reached`.
+## Recompute the effective shaft clearance width from the current per-dig money upgrades
+## (Shaft Engineering) and reconfigure the supports + re-check gating. Called at dig start
+## (upgrades reset → base width) and immediately after a purchase (narrows the remaining
+## descent). The current support depth is preserved so already-cleared layers stay supported.
+func _recompute_shaft() -> void:
+	var reduction: int = _run_state.shaft_width_reduction() if _run_state != null else 0
+	_shaft_w = Registry.effective_shaft_width(_tables, reduction)
+	_shaft_left = Registry.effective_shaft_left_cell(_tables, _shaft_w)
+	if _shaft_supports != null:
+		var keep_row: int = _platform.support_row if _platform != null else 0
+		_shaft_supports.configure(_tables, _shaft_left, _shaft_w, keep_row)
+	# NOTE: callers that run mid-dig (grid window loaded) follow this with _check_descent();
+	# _start_dig deliberately does NOT, because the chunk window isn't loaded yet and a scan
+	# would read unloaded cells as air and march the supports to the bottom.
+
+
 func _check_descent() -> void:
-	if _platform == null:
+	if _platform == null or _shaft_supports == null:
 		return
-	var hp_grid: Dictionary = _hp_grid_beneath(_platform.target_row)
-	var steps: int = _platform.try_descend(hp_grid)
-	if steps > 0:
-		_run_state.depth = _platform.target_row
-		var center_chunk: int = _grid.cell_to_chunk(_platform.target_row)
-		_grid.update_window(center_chunk, CHUNK_WINDOW_HALF)
-		_render_all_loaded_chunks()
-		# Depth-drop beat (v0.5 arcade pass): a quick squash on the depth chip. Presentation only;
-		# bump_depth is a no-op headless and self-gates (a tween on a label, harmless if motion 0).
-		if _hud != null:
-			_hud.bump_depth()
-		# Descent cue (v0.5 arcade audio): a low mechanical thud when the platform drops — this moment
-		# was silent before. Fired once per descent regardless of step count.
-		Audio.play_descend()  # AC-5.13.1
+	var support_row: int = _platform.support_row
+	# UNIT MAPGEN (infinite shaft): there is no mine floor to scan to, so we walk a BOUNDED
+	# window at a time and re-scan from the advanced row, looping until the supports stop
+	# advancing. This finds the deepest contiguous cleared row (matching the old full-height
+	# scan) WITHOUT an unbounded single scan — the loop terminates as soon as a solid row blocks.
+	var bottom: int = Registry.mine_bottom_row(_tables)
+	var window: int = _descent_scan_rows()
+	var row: int = support_row
+	while row < bottom:
+		var max_row: int = mini(bottom, row + window)
+		var hp_grid: Dictionary = _hp_grid_for_support_scan(row, max_row)
+		var next_row: int = PlatformLogic.next_support_row(hp_grid, row, _shaft_w, max_row, _shaft_left)
+		if next_row <= row:
+			break  # a solid row blocks descent — stop (terminates the loop, bounded)
+		row = next_row
+	if row > support_row:
+		_platform.support_row = row
+		_shaft_supports.advance_to(row)
 
 
-## Build the {Vector2i: hp} grid for the rows just beneath `row` (descent lookahead).
-func _hp_grid_beneath(row: int) -> Dictionary:
+## How many rows below the current support the descent scan inspects per step. The platform
+## can only advance through contiguous cleared rows; a window of descent_max_steps (+ one blast
+## radius of slack) keeps each scan bounded in the infinite shaft (a full-height scan would be
+## unbounded). _check_descent loops over these windows until the supports stop advancing.
+func _descent_scan_rows() -> int:
+	var steps: int = maxi(1, Registry.descent_max_steps(_tables))
+	var slack: int = maxi(1, int(Registry.balance(_tables, "max_blast_radius_cells", 4)))
+	return steps + slack
+
+
+## Build the {Vector2i: hp} grid for the rows that could become supported next.
+## Scans from just below the current support row down to `max_row` (the bounded window).
+func _hp_grid_for_support_scan(support_row: int, max_row: int) -> Dictionary:
 	var out: Dictionary = {}
-	var max_steps: int = Registry.descent_max_steps(_tables)
-	for dy in range(1, max_steps + 1):
-		var ry: int = row + dy
+	for ry in range(support_row + 1, max_row + 1):
 		for x in range(_shaft_left, _shaft_left + _shaft_w):
 			out[Vector2i(x, ry)] = _grid.get_hp(x, ry)
 	return out
+
+
+## The supports finished extending to `row`; lower the platform to that depth,
+## re-window chunks, and refresh the HUD depth readout.
+func _on_support_reached(row: int) -> void:
+	if _platform == null:
+		return
+	if not _platform.descend_to(row):
+		# Already there (e.g. player manually lowered) — still refresh depth readout.
+		_run_state.depth = row
+		_refresh_all_ui()
+		return
+	_run_state.depth = row
+	var center_chunk: int = _grid.cell_to_chunk(row)
+	_grid.update_window(center_chunk, CHUNK_WINDOW_HALF)
+	_render_all_loaded_chunks()
+	if _hud != null:
+		_hud.set_depth(row)
+		_hud.bump_depth()
+	Audio.play_descend()  # AC-5.13.1
+	_refresh_all_ui()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DIG-END PANEL ACTIONS (power growth)
@@ -1218,20 +1719,51 @@ func _spawn_explosion(center_cell: Vector2i, radius: int = 1) -> void:
 var _animate_money_next_refresh: bool = false
 
 
-## Reflect the throw-cooldown state on the button fill + countdown label. The fill grows from the
-## bottom (1 - progress at the top, full height when done) and is hidden when the cooldown ends.
+## Reflect the throw-cooldown on the button: a top-anchored dark overlay that DRAINS by HEIGHT
+## (size-driven, immune to the old anchor/offset bug) + a numeric countdown + a desaturated button.
+## Driven every frame from ThrowControls (the single clock) and never from the explosion/detonation —
+## the timer is a pure readout, armed the instant throw_at() releases the charge.
 func _update_cooldown_visual() -> void:
 	if _throw_controls == null:
 		return
 	var cooling: bool = _throw_controls.is_cooling_down
+	# remaining_frac: 1.0 = just thrown (full dark band), 0.0 = ready (band gone).
+	var remaining_frac: float = clampf(1.0 - _throw_controls.cooldown_progress, 0.0, 1.0)
 	if _cooldown_fill != null:
 		_cooldown_fill.visible = cooling
-		# progress 0 → full grey overlay; progress 1 → no overlay (fill scaled to 0 from bottom).
-		var p: float = _throw_controls.cooldown_progress
-		_cooldown_fill.anchor_top = 1.0 - p
+		if cooling and _throw_button != null:
+			# Top-anchored linear drain: a full-width band covering the TOP `remaining_frac` of the
+			# button, shrinking to nothing as it readies. Absolute SIZE from the top edge — no anchor
+			# vs. offset fight (the old "dead timer" bug), so it visibly drains every frame.
+			var bw: float = _throw_button.size.x
+			var bh: float = _throw_button.size.y
+			_cooldown_fill.set_anchors_preset(Control.PRESET_TOP_WIDE)
+			_cooldown_fill.position = Vector2.ZERO
+			_cooldown_fill.size = Vector2(bw, bh * remaining_frac)
 	if _cooldown_label != null:
-		_cooldown_label.text = _throw_controls.cooldown_text
+		_cooldown_label.text = _throw_controls.cooldown_text  # "" when ready
 		_cooldown_label.visible = cooling
+	# Affordance: while cooling, desaturate the whole button AND blank its "THROW" label so the
+	# countdown reads clearly (the two overlapped + muddied each other otherwise). Restore on ready.
+	if _throw_button != null:
+		_throw_button.modulate = Color(0.55, 0.55, 0.6, 1.0) if cooling else Color.WHITE
+		if cooling:
+			if _throw_button.text != "":
+				_throw_button_label = _throw_button.text
+				_throw_button.text = ""
+		elif _throw_button_label != "":
+			_throw_button.text = _throw_button_label
+			_throw_button_label = ""
+
+
+## Single entry point for "the dig state just changed, re-sync the view": refreshes the whole HUD
+## then recomputes the aim preview. The two are almost always needed together after a state change
+## (a throw resolved, a charge was selected, the dig started/ended), so callers route through here
+## instead of remembering to call both. Pure mechanical pairing — no behavior change vs. calling
+## `_refresh_all_ui()` then `_update_preview()` back-to-back at the call site.
+func _refresh_after_state_change() -> void:
+	_refresh_all_ui()
+	_update_preview()
 
 
 func _refresh_all_ui() -> void:
@@ -1257,10 +1789,18 @@ func _refresh_all_ui() -> void:
 		# The bottom button now opens the shop modal, not a direct purchase, so it only
 		# locks when the dig has ended.
 		_buy_pack_button.disabled = _run_state.dig_ended
-	if _elevator_up != null:
-		_elevator_up.disabled = (_platform == null) or (not _platform.can_move_up())
-	if _elevator_down != null:
-		_elevator_down.disabled = (_platform == null) or (not _platform.can_move_down())
+	if _mine_select_button != null:
+		_mine_select_button.disabled = _run_state.dig_ended
+	# Elevator buttons: HIDE (not just disable) the direction you can't go — up vanishes at the top
+	# of the reachable area, down vanishes at the bottom (can_move_up/down already track the
+	# supported, row-by-row reachable span). Also hidden entirely while the dig has ended. The two
+	# buttons sit at FIXED slots in the HUD, so hiding one never moves the other (set_elevator_*_visible
+	# is pure show/hide — the up slot stays upper, the down slot stays lower).
+	if _hud != null:
+		var can_up: bool = (not _run_state.dig_ended) and (_platform != null) and _platform.can_move_up()
+		var can_down: bool = (not _run_state.dig_ended) and (_platform != null) and _platform.can_move_down()
+		_hud.set_elevator_up_visible(can_up)
+		_hud.set_elevator_down_visible(can_down)
 	# One-shot: consumed so a non-credit refresh always snaps the canonical money label.
 	_animate_money_next_refresh = false
 
@@ -1315,15 +1855,46 @@ func _physics_process(_delta: float) -> void:
 	if _active_charge != null and not is_instance_valid(_active_charge):
 		_active_charge = null
 		_run_state.resolve_charge()
-		_refresh_all_ui()
-		_update_preview()
+		_refresh_after_state_change()
+
+## Tracks whether the launch point was MOVING last frame (platform/supports), so the aim arc can
+## be redrawn the instant the motion settles (Phase D: the `descended` signal fires when the tween
+## STARTS, not finishes, so a tween-finish hook alone wouldn't catch the settle).
+var _aim_was_moving: bool = false
+
+## Last light_uv pushed to the headlamp shader, so _update_light_mask can skip the
+## set_shader_parameter on idle frames where the platform/camera (and thus the UV) hasn't moved.
+## NAN sentinel forces the first computed value through.
+var _last_light_uv: Vector2 = Vector2(NAN, NAN)
+
 
 func _process(delta: float) -> void:
 	_update_light_mask()
+	# Held keyboard aim (D1): glide the launch angle while aim_left/aim_right is held. Done in
+	# _process via Input.is_action_pressed (the "held → poll" half), so the angle moves smoothly
+	# every frame, not once per key event. Gated (paused/dig-ended/in-flight) inside the helper.
+	_apply_keyboard_aim(delta)
+	# Phase D settle: redraw the aim arc the frame the platform/supports stop moving (they hid it
+	# while in flight). _update_preview is itself gated, so re-calling when stopped is the redraw.
+	var moving: bool = _aim_is_moving()
+	if _aim_was_moving and not moving:
+		_update_preview()
+	_aim_was_moving = moving
 	_animate_aim_line(delta)
-	if _throw_controls != null and _throw_controls.advance_cooldown(delta):
+	# Continuous elevator hold (button or key held → ramped row-by-row glide). Polled here so a HOLD
+	# moves every frame, not once per click — a tap still moves exactly one row (the ramp's first-frame
+	# guarantee). Gated (paused/dig-ended/limits) inside the helper.
+	_process_elevator_hold(delta)
+	# Throw cooldown: advance the clock and refresh the readout EVERY frame while cooling, fully
+	# independent of the charge/explosion. The cooldown is a pure timer armed on release in throw_at();
+	# nothing about the blast drives it. advance_cooldown() returns true only on the expiry tick — we
+	# use that edge to re-sync the rest of the HUD (button re-enable) exactly once, but the fill/label
+	# must update every frame in between (that was the "dead timer" bug — it only refreshed on expiry).
+	if _throw_controls != null and _throw_controls.is_cooling_down:
+		var just_expired: bool = _throw_controls.advance_cooldown(delta)
 		_update_cooldown_visual()
-		_refresh_all_ui()
+		if just_expired:
+			_refresh_all_ui()  # re-enable the button etc. exactly once, on the ready edge
 
 func _update_light_mask() -> void:
 	if _light_mask == null:
@@ -1336,10 +1907,13 @@ func _update_light_mask() -> void:
 		return
 	var world_pos: Vector2 = _platform.platform_target_position() if _platform != null else _muzzle_position()
 	var screen_pos: Vector2 = get_viewport().get_canvas_transform() * world_pos
-	mat.set_shader_parameter(
-		"light_uv",
-		Vector2(screen_pos.x / viewport_size.x, screen_pos.y / viewport_size.y)
-	)
+	var light_uv := Vector2(screen_pos.x / viewport_size.x, screen_pos.y / viewport_size.y)
+	# Dirty check: the platform/camera is settled most frames, so the UV is identical frame to frame.
+	# Skip the shader write (and its uniform upload) when it hasn't changed since last frame.
+	if light_uv.is_equal_approx(_last_light_uv):
+		return
+	_last_light_uv = light_uv
+	mat.set_shader_parameter("light_uv", light_uv)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADLESS-TEST ACCESSORS (read-only views into the wired systems)
@@ -1380,3 +1954,23 @@ var overlay: SettingsOverlay:
 var hud: Hud:
 	get:
 		return _hud
+
+# ── DEBUG-OVERLAY READ-ONLY VIEWS (UNIT INFRA) ─────────────────────────────────
+# Consumed by DebugOverlay via has_method/call so it never hard-depends on the controller's
+# internals. All read-only — toggling the overlay can never change game state.
+
+## The active run seed (the dig's reproducibility key). Pre-boot → 0.
+func debug_run_seed() -> int:
+	return Registry.run_seed(_tables) if not _tables.is_empty() else 0
+
+## Current depth in cells, or 0 before the run state is built.
+func debug_depth() -> int:
+	return _run_state.depth if _run_state != null else 0
+
+## The currently-selected charge id, or "" before the run state is built.
+func debug_selected_charge() -> String:
+	return _run_state.selected_id if _run_state != null else ""
+
+## The id of the mine the live grid belongs to.
+func debug_mine_id() -> String:
+	return _active_mine_id
