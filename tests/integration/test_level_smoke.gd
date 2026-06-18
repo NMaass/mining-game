@@ -115,10 +115,10 @@ func test_authored_scene_nodes_present() -> void:
 	assert_object(mine.get_node_or_null("PrestigeOffer/Panel/Box/DeclineButton")).is_not_null()
 	# AC-5.8.1: the authored HUD has money + depth (top-left), a nav button (top-right), a
 	# compact relic indicator, and the depth odds readout — assert each node is present.
-	assert_object(mine.get_node_or_null("Hud/Top/MoneyBox/Money")).is_not_null()
-	assert_object(mine.get_node_or_null("Hud/Top/DepthBox/Depth")).is_not_null()
-	assert_object(mine.get_node_or_null("Hud/Top/RelicBox/Relic")).is_not_null()
-	assert_object(mine.get_node_or_null("Hud/Top/Odds")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/Top/MoneyBox/Row/Money")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/Top/DepthBox/Row/Depth")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/Top/RelicBox/Row/Relic")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/OddsBar/Row/Odds")).is_not_null()
 	assert_object(mine.get_node_or_null("Hud/TopRight/NavButton")).is_not_null()
 	# AC-5.8.4: the dig-end panel is an EXPLAINED state — title + banked + power readouts + the
 	# two actions (buy upgrade / next dig) are authored, not just a bare panel.
@@ -247,18 +247,18 @@ func test_hud_shows_money_and_depth_text() -> void:
 	# This proves the controller actually pushes values into the authored labels (set_money etc.),
 	# not just that the nodes exist.
 	var mine := _boot_mine()
-	var money := mine.get_node("Hud/Top/MoneyBox/Money") as Label
-	var depth := mine.get_node("Hud/Top/DepthBox/Depth") as Label
-	var relic := mine.get_node("Hud/Top/RelicBox/Relic") as Label
-	var odds := mine.get_node("Hud/Top/Odds") as Label
+	var money := mine.get_node("Hud/Top/MoneyBox/Row/Money") as Label
+	var depth := mine.get_node("Hud/Top/DepthBox/Row/Depth") as Label
+	var relic := mine.get_node("Hud/Top/RelicBox/Row/Relic") as Label
+	var odds := mine.get_node("Hud/OddsBar/Row/Odds") as Label
 	assert_str(money.text).contains("$")
-	assert_str(depth.text).contains("Depth")
+	assert_str(depth.text).contains("m")
 	assert_str(relic.text).contains("Relic")
 
 func test_hud_shows_depth_resource_odds() -> void:
 	# AC-5.8.8: the HUD displays the current depth band's resource probabilities.
 	var mine := _boot_mine()
-	var odds_label: Label = mine.get_node("Hud/Top/Odds")
+	var odds_label: Label = mine.get_node("Hud/OddsBar/Row/Odds")
 	# Boot is at depth 0 (surface band), which has copper + gold odds.
 	assert_str(odds_label.text).contains("Cu")
 	# Descend to the deep band and verify gold odds are shown + copper odds changed.
@@ -271,7 +271,7 @@ func test_hud_depth_odds_update_on_descent() -> void:
 	var mine := _boot_mine()
 	var grid: BlockGrid = mine.grid
 	var platform: Platform = mine.platform
-	var odds_label: Label = mine.get_node("Hud/Top/Odds")
+	var odds_label: Label = mine.get_node("Hud/OddsBar/Row/Odds")
 	var text_before: String = odds_label.text
 
 	# Clear enough cells to descend below the surface band (min depth 40 for deep band).
@@ -1178,7 +1178,7 @@ func test_set_money_stays_snap_exact_during_a_roll() -> void:
 	# read the label IMMEDIATELY: it is the exact snapped formatting, not an interpolated value.
 	var mine := _boot_mine()
 	var hud: Hud = mine.hud
-	var money_label: Label = hud.get_node("Top/MoneyBox/Money")
+	var money_label: Label = hud.get_node("Top/MoneyBox/Row/Money")
 	hud.set_money(0)
 	hud.tick_money_to(1_000_000, 1.0)  # start an animated roll
 	hud.set_money(12345)               # the deterministic path snaps mid-roll
@@ -1191,7 +1191,7 @@ func test_tick_money_to_snaps_at_zero_motion() -> void:
 	# formatting immediately (no await), so reduced-motion players get the canonical instant readout.
 	var mine := _boot_mine()
 	var hud: Hud = mine.hud
-	var money_label: Label = hud.get_node("Top/MoneyBox/Money")
+	var money_label: Label = hud.get_node("Top/MoneyBox/Row/Money")
 	hud.set_money(0)
 	hud.tick_money_to(500, 0.0)
 	assert_str(money_label.text).is_equal("$500")
@@ -1279,7 +1279,7 @@ func test_small_break_does_not_hit_stop() -> void:
 func test_hud_money_abbreviates_large_values() -> void:
 	# AC-5.8.6: large numbers abbreviate so the readout stays compact.
 	var mine := _boot_mine()
-	var money_label: Label = mine.hud.get_node("Top/MoneyBox/Money")
+	var money_label: Label = mine.hud.get_node("Top/MoneyBox/Row/Money")
 	mine.hud.set_money(500)
 	assert_str(money_label.text).is_equal("$500")
 	mine.hud.set_money(12345)
@@ -1300,7 +1300,7 @@ func test_hud_top_bar_fits_at_max_text_scale() -> void:
 	hud.apply_layout_with(Vector2i(720, 1280), Rect2i(0, 0, 720, 1280), logical)
 	await await_idle_frame()
 
-	var money_label: Label = hud.get_node("Top/MoneyBox/Money")
+	var money_label: Label = hud.get_node("Top/MoneyBox/Row/Money")
 	assert_int(money_label.text.length()).override_failure_message(
 		"money '%s' is not abbreviated at max scale (AC-5.8.6)" % money_label.text
 	).is_less_equal(8)
@@ -1436,8 +1436,8 @@ func test_depth_bump_callable_without_crash() -> void:
 	var mine := _boot_mine()
 	mine.hud.set_depth(7)
 	mine.hud.bump_depth()
-	var depth_label: Label = mine.hud.get_node("Top/DepthBox/Depth")
-	assert_str(depth_label.text).is_equal("Depth 7")
+	var depth_label: Label = mine.hud.get_node("Top/DepthBox/Row/Depth")
+	assert_str(depth_label.text).is_equal("7m")
 
 # ── Throw cooldown HUD wiring (v0.5) ───────────────────────────────────────────
 

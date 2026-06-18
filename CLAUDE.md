@@ -6,13 +6,14 @@ build contract is `spec/VERTICAL_SLICE.md` (its **§0 is the v0.3→v0.4 salvage
 plan + gap register is `spec/ROADMAP.md`. When code and spec disagree, the spec wins or the spec gets
 updated — never silent drift.
 
-## Current status (2026-06-15): v0.5.0 design pivot in progress
-**Design pivot:** `spec/SPEC.md` v0.5.0 moves from an infinite vertical shaft to a **bounded
-rectangular mine volume** per dig, adds a **prestige offer UI** when the relic block breaks (accept →
-bank +1 point and end dig; decline → keep digging), and adds a **HUD readout for resource odds at the
-current depth**. Prestige is **exactly 1 point per relic**; money is per-dig only and does **not**
-convert to prestige. There is no passive income. The primary feel reference remains **Motherload**,
-with Dome Keeper's bounded-mine structure as an adjacent reference.
+## Current status (2026-06-18): v0.6 — infinite mine, fixed elevator, cooldown button, decouple pass
+**State:** 583 tests, both gates exit 0 (DATA OK 15 tables, 0 orphans). v0.6 returns the dig to an
+**infinite vertical descent** (gen streams chunks around the platform; the v0.5.0 bounded-volume idea
+was superseded), adds a fixed continuous-glide **elevator**, a pure-timer **throw-cooldown button**,
+logging/debug, camera/dirt/dotted-guide juice, Deep Mine + money upgrades, and a sticky-bomb fix. See
+**Build progress** below. Prestige stays **exactly 1 point per relic** via the prestige-offer UI on
+relic break; money is per-dig only and does not convert to prestige; no passive income. Primary feel
+reference: **Motherload**.
 
 ## Previous status (2026-06-15 08:30): v0.4 slice COMPLETE + audited; nav→Settings overlay + accessibility settings landed
 **08:30 run:** independently re-verified the 03:30 state (both gates green; the input path is genuinely
@@ -119,8 +120,10 @@ Reports land in `reports/`. CI runs both gates on push (`.github/workflows/ci.ym
   block — NOT derived from `hardness`**; the per-cell HP store is seeded from it once at chunk init
   (`block_grid.gd` ← `Registry.block_max_hp`). Depth + per-mine HP multipliers live in `/data` balance
   and scale base HP via `Registry.scaled_block_hp` (`HP = max_hp × depth_mult × mine_hardness_mult`).
-  The `hardness` field is currently **vestigial** — an open salvage item: wire it into HP derivation
-  or delete it (`spec/VERTICAL_SLICE.md` §0).
+  The `hardness` field is **NOT vestigial** — it is load-bearing as a data-integrity invariant:
+  `data_validator._check_hardness_hp_monotonic` enforces that `max_hp` is monotonic non-decreasing in
+  `hardness` across diggable blocks. It does not *derive* runtime HP (that stays the authored `max_hp`
+  literal via `Registry.scaled_block_hp`), but deleting it would break the data gate + block-types schema.
 - **Per-cell HP/damage lives in a per-chunk `PackedInt32Array`**, NOT in TileMap cells.
 - **No lose state.** A throw is always possible via the **free unlimited charge** (a permanent tray
   slot, ∞, never decremented). The tray is never empty. A dig ends by **collecting the relic**
@@ -190,9 +193,34 @@ crediting, loot sampling, dig loop, relic-ends-dig, minimal prestige power-growt
 4. Both gates exit 0; no new errors/orphans; 60 fps on target incl. web (for runtime features).
 5. Tests prove the actual acceptance behavior, not just helper functions (see Audit discipline).
 
-## Build progress (vertical slice — v0.4 salvage pass)
-**State:** v0.4 slice **COMPLETE + audited** — **329 tests, both gates green**
-(2026-06-15 08:30). The `spec/VERTICAL_SLICE.md` §0 KEEP / REWORK / DELETE map is done:
+## Build progress (vertical slice)
+**State (2026-06-18, v0.6):** slice **COMPLETE + green** — **583 tests, both gates exit 0**
+(DATA OK 15 tables, 0 orphans). v0.6 layered onto the v0.5 arcade pass:
+- **Infinite mine generation:** the dig is no longer a bounded volume — gen windows around the
+  platform and streams new chunks as you descend (still pure `f(mine_seed, cell)` via FastNoiseLite;
+  golden gen/blast determinism preserved).
+- **Logging / debug:** a boot logger (`user://mining_game.log`, DEBUG threshold) + an in-HUD debug
+  overlay for live state inspection.
+- **Camera / art feel:** higher `camera_zoom` + tuned `camera_lookahead_cells`; per-cell dirt tile
+  variation; **dotted aim guides** (animated aim line + reticle, initial-arc hint only).
+- **Fixed elevator:** continuous hold-to-glide descent (tap = one row; hold = ramped row-by-row,
+  polled in `_process` via `_process_elevator_hold`), elevator-side setting honored.
+- **Sticky-bomb fix + throw cooldown button:** the throw cooldown is a **pure time-driven timer**
+  (`ThrowControls.start_cooldown`/`advance_cooldown`) armed on release, fully independent of the
+  blast/explosion — drains every frame, re-enables the button on the expiry edge. Proven by a pure
+  unit test (`test_aim.test_cooldown_is_pure_time_timer_independent_of_explosion`) + an integration
+  test (`test_level_smoke.test_cooldown_visual_drains_to_completion_independent_of_detonation`, which
+  watches for ANY detonation while the timer drains and asserts none fired).
+- **Deep Mine + money upgrades; misc physics/render/UX fixes.**
+- **Architecture decouple (this run):** centralized post-state re-render via `_refresh_after_state_change()`
+  (= `_refresh_all_ui()` + `_update_preview()`, 5 call sites); a **dirty-checked `_update_light_mask()`**
+  (caches `_last_light_uv`, skips the shader-param write when the platform/camera is settled);
+  the per-frame `_process` cooldown path now re-runs the full HUD refresh **only on the ready edge**
+  (no redundant per-frame double-write). Orphan cleanup: `shaft_guide.gd` (superseded by
+  `ShaftSupports`) is gone — **0 orphan scripts/scenes** confirmed by a full ref sweep.
+
+### v0.4 salvage pass (historical — 329 tests, audited 2026-06-15 08:30)
+The `spec/VERTICAL_SLICE.md` §0 KEEP / REWORK / DELETE map is done:
 - **KEEP ✅:** `aim.gd`, `blast.gd` (now fuzzy + seeded), `block_grid.gd` HP store, `registry.gd`,
   `economy.gd`, the pure-logic suites + fail-on-missing goldens — all in place.
 - **REWORK ✅:** `block_gen.gd` → FastNoiseLite veins (done); `charge.gd`/`throw_params.gd` →

@@ -28,9 +28,9 @@ content_margin_left = 8.0
 content_margin_top = 8.0
 content_margin_right = 8.0
 content_margin_bottom = 8.0
-bg_color = Color(0.09, 0.09, 0.11, 0.85)
-border_width_top = 2
-border_color = Color(0.3, 0.3, 0.36, 0.9)
+bg_color = Color(0.07, 0.075, 0.1, 0.95)
+border_width_top = 3
+border_color = Color(0.4, 0.43, 0.52, 0.95)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_primarybtn"]
 content_margin_left = 12.0
@@ -124,6 +124,49 @@ corner_radius_top_right = 12
 corner_radius_bottom_left = 12
 corner_radius_bottom_right = 12
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_chip"]
+content_margin_left = 10.0
+content_margin_top = 5.0
+content_margin_right = 12.0
+content_margin_bottom = 5.0
+bg_color = Color(0.1, 0.11, 0.14, 0.82)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.33, 0.36, 0.44, 0.85)
+corner_radius_top_left = 9
+corner_radius_top_right = 9
+corner_radius_bottom_left = 9
+corner_radius_bottom_right = 9
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_oddsbar"]
+content_margin_left = 12.0
+content_margin_top = 6.0
+content_margin_right = 12.0
+content_margin_bottom = 6.0
+bg_color = Color(0.08, 0.09, 0.12, 0.78)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.28, 0.31, 0.39, 0.8)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_left = 10
+corner_radius_bottom_right = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_oddschip"]
+content_margin_left = 8.0
+content_margin_top = 3.0
+content_margin_right = 8.0
+content_margin_bottom = 3.0
+bg_color = Color(0.14, 0.15, 0.19, 0.9)
+corner_radius_top_left = 7
+corner_radius_top_right = 7
+corner_radius_bottom_left = 7
+corner_radius_bottom_right = 7
+
 [node name="Mine" type="Node2D"]
 script = ExtResource("1_mine")
 
@@ -173,58 +216,107 @@ offset_left = 16.0
 offset_top = 16.0
 offset_right = 500.0
 offset_bottom = 60.0
-theme_override_constants/separation = 16
+theme_override_constants/separation = 8
 
-[node name="MoneyBox" type="HBoxContainer" parent="Hud/Top"]
+[node name="MoneyBox" type="PanelContainer" parent="Hud/Top"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_chip")
+
+[node name="Row" type="HBoxContainer" parent="Hud/Top/MoneyBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="MoneyIcon" type="TextureRect" parent="Hud/Top/MoneyBox"]
+[node name="MoneyIcon" type="TextureRect" parent="Hud/Top/MoneyBox/Row"]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+size_flags_vertical = 4
 texture = ExtResource("12_iconmoney")
 stretch_mode = 5
 
-[node name="Money" type="Label" parent="Hud/Top/MoneyBox"]
+[node name="Money" type="Label" parent="Hud/Top/MoneyBox/Row"]
 layout_mode = 2
+size_flags_vertical = 4
 text = "$0"
+theme_override_colors/font_color = Color(1, 0.85, 0.42, 1)
 theme_override_fonts/font = ExtResource("11_pixelfont")
-theme_override_font_sizes/font_size = 28
+theme_override_font_sizes/font_size = 26
 
-[node name="DepthBox" type="HBoxContainer" parent="Hud/Top"]
+[node name="DepthBox" type="PanelContainer" parent="Hud/Top"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_chip")
+
+[node name="Row" type="HBoxContainer" parent="Hud/Top/DepthBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="DepthIcon" type="TextureRect" parent="Hud/Top/DepthBox"]
+[node name="DepthIcon" type="TextureRect" parent="Hud/Top/DepthBox/Row"]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+size_flags_vertical = 4
 texture = ExtResource("13_icondepth")
 stretch_mode = 5
 
-[node name="Depth" type="Label" parent="Hud/Top/DepthBox"]
+[node name="Depth" type="Label" parent="Hud/Top/DepthBox/Row"]
 layout_mode = 2
-text = "Depth 0"
+size_flags_vertical = 4
+text = "0m"
+theme_override_colors/font_color = Color(0.78, 0.86, 0.96, 1)
 theme_override_fonts/font = ExtResource("11_pixelfont")
-theme_override_font_sizes/font_size = 28
+theme_override_font_sizes/font_size = 26
 
-[node name="RelicBox" type="HBoxContainer" parent="Hud/Top"]
+[node name="RelicBox" type="PanelContainer" parent="Hud/Top"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_chip")
+
+[node name="Row" type="HBoxContainer" parent="Hud/Top/RelicBox"]
 layout_mode = 2
 theme_override_constants/separation = 6
 
-[node name="RelicIcon" type="TextureRect" parent="Hud/Top/RelicBox"]
+[node name="RelicIcon" type="TextureRect" parent="Hud/Top/RelicBox/Row"]
+custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
+size_flags_vertical = 4
 texture = ExtResource("14_iconrelic")
 stretch_mode = 5
 
-[node name="Relic" type="Label" parent="Hud/Top/RelicBox"]
+[node name="Relic" type="Label" parent="Hud/Top/RelicBox/Row"]
 layout_mode = 2
+size_flags_vertical = 4
 text = "Relic …"
+theme_override_colors/font_color = Color(0.95, 0.82, 0.55, 1)
 theme_override_fonts/font = ExtResource("11_pixelfont")
-theme_override_font_sizes/font_size = 28
+theme_override_font_sizes/font_size = 26
 
-[node name="Odds" type="Label" parent="Hud/Top"]
+[node name="OddsBar" type="PanelContainer" parent="Hud"]
+offset_left = 16.0
+offset_top = 72.0
+offset_right = 360.0
+offset_bottom = 110.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_oddsbar")
+
+[node name="Row" type="HBoxContainer" parent="Hud/OddsBar"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="OddsHeader" type="Label" parent="Hud/OddsBar/Row"]
+layout_mode = 2
+size_flags_vertical = 4
+text = "ORE"
+theme_override_colors/font_color = Color(0.6, 0.66, 0.76, 1)
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 18
+
+[node name="Entries" type="HBoxContainer" parent="Hud/OddsBar/Row"]
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_constants/separation = 6
+
+[node name="Odds" type="Label" parent="Hud/OddsBar/Row"]
+visible = false
 layout_mode = 2
 text = ""
 theme_override_fonts/font = ExtResource("11_pixelfont")
-theme_override_font_sizes/font_size = 22
+theme_override_font_sizes/font_size = 18
 
 [node name="TopRight" type="HBoxContainer" parent="Hud"]
 offset_left = 560.0

@@ -38,11 +38,15 @@ const _ELEVATOR_SLOT_GAP := 12.0
 
 @onready var _top: Control = get_node_or_null("Top")
 @onready var _money_box: Control = get_node_or_null("Top/MoneyBox")
-@onready var _money_icon: Control = get_node_or_null("Top/MoneyBox/MoneyIcon")
-@onready var _money_label: Label = get_node_or_null("Top/MoneyBox/Money")
-@onready var _depth_label: Label = get_node_or_null("Top/DepthBox/Depth")
-@onready var _relic_label: Label = get_node_or_null("Top/RelicBox/Relic")
-@onready var _odds_label: Label = get_node_or_null("Top/Odds")
+@onready var _money_icon: Control = get_node_or_null("Top/MoneyBox/Row/MoneyIcon")
+@onready var _money_label: Label = get_node_or_null("Top/MoneyBox/Row/Money")
+@onready var _depth_label: Label = get_node_or_null("Top/DepthBox/Row/Depth")
+@onready var _relic_label: Label = get_node_or_null("Top/RelicBox/Row/Relic")
+## Dedicated resource-odds strip (AC-5.8.8): a styled panel below the top bar. `_odds_label`
+## is the legible, test-read STRING; `_odds_entries` is the colour-coded chip row players see.
+@onready var _odds_bar: Control = get_node_or_null("OddsBar")
+@onready var _odds_label: Label = get_node_or_null("OddsBar/Row/Odds")
+@onready var _odds_entries: Control = get_node_or_null("OddsBar/Row/Entries")
 @onready var _top_right: Control = get_node_or_null("TopRight")
 @onready var _nav_button: Button = get_node_or_null("TopRight/NavButton")
 @onready var _end_dig_button: Button = get_node_or_null("TopRight/EndDigButton")
@@ -154,10 +158,21 @@ func apply_layout_with(window_px: Vector2i, safe_px: Rect2i, logical: Vector2i) 
 	var min_touch: float = _min_touch()
 
 	# Top bar (money/depth/relic), below the top inset, left of the nav reserve.
+	var top_h: float = maxf(min_touch, 44.0)
 	if _top != null:
-		var top_h: float = maxf(min_touch, 44.0)
 		_set_rect(_top, insets["left"], insets["top"],
 			float(logical.x) - insets["right"] - _NAV_RESERVE, insets["top"] + top_h)
+
+	# Resource-odds strip (AC-5.8.8): a distinct styled panel directly below the top bar,
+	# left-aligned inside the safe area. It auto-sizes to its content width (the chip row), so
+	# it never collides with the nav reserve; the width is capped to clear both side insets.
+	if _odds_bar != null:
+		var odds_top: float = insets["top"] + top_h + _BAR_PAD
+		var odds_min: Vector2 = _odds_bar.get_combined_minimum_size()
+		var odds_h: float = maxf(odds_min.y, 30.0)
+		var odds_w: float = maxf(odds_min.x, 120.0)
+		odds_w = minf(odds_w, float(logical.x) - insets["left"] - insets["right"])
+		_set_rect(_odds_bar, insets["left"], odds_top, insets["left"] + odds_w, odds_top + odds_h)
 
 	# Top-right button group (End Dig + Nav), clear of the right inset.
 	if _top_right != null:
@@ -454,10 +469,11 @@ func _apply_text_scale() -> void:
 		label.add_theme_font_size_override("font_size", maxi(8, int(round(float(b) * _text_scale))))
 
 
-## Update the depth readout in cells (AC-5.8.1: depth top-left).
+## Update the depth readout in cells (AC-5.8.1: depth top-left). Rendered compactly as "<N>m"
+## (one cell ≈ one metre) so the depth chip stays narrow and the top bar fits at max text scale.
 func set_depth(depth_cells: int) -> void:
 	if _depth_label != null:
-		_depth_label.text = "Depth %d" % depth_cells
+		_depth_label.text = "%dm" % depth_cells
 
 
 ## Tracks the last relic-found state so the chip pulse fires ONLY on the false→true transition
@@ -491,12 +507,20 @@ func _pulse_relic(motion: float) -> void:
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
+## The font size of an odds-entry chip's text (presentation detail). Scaled by _text_scale so the
+## resource strip tracks the accessibility text-scale setting alongside the top-bar readouts.
+const _ODDS_FONT_SIZE := 18
+
+const _BlockArt := preload("res://scripts/core/block_art.gd")
+
+
 ## Update the depth resource-odds readout (AC-5.8.8). `odds` is {block_id: probability 0..1}.
-## Filters to ore-bearing blocks and displays short "NAME XX%" entries.
+## Filters to ore-bearing blocks; renders a colour-coded chip row (a swatch in the ore's block
+## colour + "NAME XX%") players read, and keeps the hidden `_odds_label` STRING in sync so the
+## same information is exposed for tests and never depends on per-chip layout.
 func set_depth_odds(odds: Dictionary) -> void:
-	if _odds_label == null:
-		return
 	var parts: Array = []
+	var entries: Array = []  # [{short, pct, color}]
 	var keys: Array = odds.keys()
 	keys.sort()
 	for id in keys:
@@ -504,12 +528,55 @@ func set_depth_odds(odds: Dictionary) -> void:
 		if p <= 0.0:
 			continue
 		# Only show ore/resource-bearing blocks to keep the readout compact.
-		# Fall back to a short id-derived label if no display_name is available.
 		var short: String = _short_resource_label(str(id))
 		if short.is_empty():
 			continue
-		parts.append("%s %d%%" % [short, int(round(p * 100.0))])
-	_odds_label.text = " | ".join(parts) if not parts.is_empty() else ""
+		var pct: int = int(round(p * 100.0))
+		parts.append("%s %d%%" % [short, pct])
+		var col: Color = _BlockArt.block_color(_tables, str(id)) if not _tables.is_empty() else Color(0.8, 0.8, 0.85)
+		entries.append({"short": short, "pct": pct, "color": col})
+	if _odds_label != null:
+		_odds_label.text = " | ".join(parts) if not parts.is_empty() else ""
+	_rebuild_odds_chips(entries)
+	# Hide the whole strip when there is nothing to show (keeps the screen clean at empty bands).
+	if _odds_bar != null:
+		_odds_bar.visible = not entries.is_empty()
+	apply_layout()
+
+
+## Rebuild the colour-coded odds chip row from [{short,pct,color}] entries. Each chip is a small
+## styled box holding a colour swatch (the ore's block colour) + "NAME XX%". Rebuilt wholesale so a
+## band change never leaves a stale entry; child count tracks the entry count exactly.
+func _rebuild_odds_chips(entries: Array) -> void:
+	if _odds_entries == null:
+		return
+	for c: Node in _odds_entries.get_children():
+		_odds_entries.remove_child(c)
+		c.queue_free()
+	for e: Dictionary in entries:
+		var chip := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.14, 0.15, 0.19, 0.9)
+		sb.set_corner_radius_all(7)
+		sb.content_margin_left = 7.0
+		sb.content_margin_right = 8.0
+		sb.content_margin_top = 2.0
+		sb.content_margin_bottom = 2.0
+		chip.add_theme_stylebox_override("panel", sb)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 5)
+		chip.add_child(row)
+		var swatch := ColorRect.new()
+		swatch.color = e["color"]
+		swatch.custom_minimum_size = Vector2(10, 10)
+		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(swatch)
+		var lbl := Label.new()
+		lbl.text = "%s %d%%" % [e["short"], int(e["pct"])]
+		lbl.add_theme_font_size_override("font_size", maxi(8, int(round(float(_ODDS_FONT_SIZE) * _text_scale))))
+		lbl.add_theme_color_override("font_color", Color(0.9, 0.93, 0.98))
+		row.add_child(lbl)
+		_odds_entries.add_child(chip)
 
 
 ## Short label for a block id in the odds readout. Returns "" for non-resource blocks.

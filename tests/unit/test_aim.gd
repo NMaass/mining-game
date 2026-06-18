@@ -345,6 +345,32 @@ func test_cooldown_progress_and_text() -> void:
 	assert_float(tc.cooldown_progress).is_equal(1.0)
 	assert_str(tc.cooldown_text).is_empty()
 
+func test_cooldown_is_pure_time_timer_independent_of_explosion() -> void:
+	# AC-5.3.3 (throw commit) / AC-5.3.8 (no lose state): the throw cooldown is a PURE time-driven
+	# timer armed on release. It has NO blast/explosion/detonation API — the only thing that advances
+	# it is accumulated frame deltas. This locks that contract: ticking delta-only (with no detonation
+	# event of any kind, because none exists on this class) drains it to completion and re-enables the
+	# throw, and the drain depends solely on elapsed time, not on the number of advance() calls.
+	var tc: ThrowControls = auto_free(ThrowControls.new())
+	tc.start_cooldown(1.0)
+	# Same total elapsed time delivered in different-sized steps reaches the same remaining state:
+	# the timer integrates delta, it is not event-counted.
+	var coarse: ThrowControls = auto_free(ThrowControls.new())
+	coarse.start_cooldown(1.0)
+	coarse.advance_cooldown(0.6)
+	var fine: ThrowControls = auto_free(ThrowControls.new())
+	fine.start_cooldown(1.0)
+	for _i in range(6):
+		fine.advance_cooldown(0.1)
+	assert_float(fine.cooldown_progress).is_equal_approx(coarse.cooldown_progress, 0.0001)
+	# advance() returns true only on the expiry tick (the edge the HUD re-syncs on), never before.
+	assert_bool(tc.advance_cooldown(0.5)).is_false()
+	assert_bool(tc.is_cooling_down).is_true()
+	assert_bool(tc.advance_cooldown(0.6)).is_true()  # crosses zero → expired this tick
+	assert_bool(tc.is_cooling_down).is_false()
+	assert_bool(tc.advance_cooldown(0.1)).is_false()  # already expired → no second edge
+	assert_bool(tc.can_throw()).is_true()
+
 # ── Keyboard held-aim (D1) — Aim.keyboard_angle_step (AC-5.3.1/5.3.2) ────────
 # Key events do NOT fire headless, so the wiring (mine.gd._apply_keyboard_aim) drives this PURE
 # helper; the helper is what we test directly. It maps a held direction + frame delta to a new
