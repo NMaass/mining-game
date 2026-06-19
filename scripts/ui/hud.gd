@@ -22,10 +22,17 @@ extends CanvasLayer
 signal nav_pressed
 ## Emitted when the player presses the prominent "End Dig" / "Prestige" button.
 signal end_dig_pressed
-## Emitted when the elevator "up" arrow is pressed.
+## Emitted when the elevator "up" arrow is PRESSED DOWN (button_down). Drives the
+## hold-to-glide poll in the controller — fire on press, not on release, so a tap
+## starts the move immediately and a hold glides (the poll's first-frame guarantee
+## covers the single-row tap).
 signal elevator_up_pressed
-## Emitted when the elevator "down" arrow is pressed.
+## Emitted when the elevator "up" arrow is RELEASED (button_up) — stops the glide.
+signal elevator_up_released
+## Emitted when the elevator "down" arrow is PRESSED DOWN (button_down).
 signal elevator_down_pressed
+## Emitted when the elevator "down" arrow is RELEASED (button_up) — stops the glide.
+signal elevator_down_released
 
 # Internal layout spacing (presentation detail, not game balance): the gap between the
 # control bars and surrounding chrome, and how far the bottom background extends behind
@@ -97,10 +104,21 @@ func _ready() -> void:
 		_nav_button.pressed.connect(_on_nav_pressed)
 	if _end_dig_button != null and not _end_dig_button.pressed.is_connected(_on_end_dig_pressed):
 		_end_dig_button.pressed.connect(_on_end_dig_pressed)
-	if _elevator_up != null and not _elevator_up.pressed.is_connected(_on_elevator_up_pressed):
-		_elevator_up.pressed.connect(_on_elevator_up_pressed)
-	if _elevator_down != null and not _elevator_down.pressed.is_connected(_on_elevator_down_pressed):
-		_elevator_down.pressed.connect(_on_elevator_down_pressed)
+	# Elevator arrows: button_down starts the move (tap OR hold), button_up stops it.
+	# `pressed` (fires on release) is NOT used — it would fire too late for a tap and
+	# double-fire with the controller's hold poll. button_down fires the instant the
+	# arrow is pressed, so the poll's first-frame guarantee yields one row for a tap and
+	# the held flag drives the continuous glide for a hold.
+	if _elevator_up != null:
+		if not _elevator_up.button_down.is_connected(_on_elevator_up_pressed):
+			_elevator_up.button_down.connect(_on_elevator_up_pressed)
+		if not _elevator_up.button_up.is_connected(_on_elevator_up_released):
+			_elevator_up.button_up.connect(_on_elevator_up_released)
+	if _elevator_down != null:
+		if not _elevator_down.button_down.is_connected(_on_elevator_down_pressed):
+			_elevator_down.button_down.connect(_on_elevator_down_pressed)
+		if not _elevator_down.button_up.is_connected(_on_elevator_down_released):
+			_elevator_down.button_up.connect(_on_elevator_down_released)
 	for button in [_nav_button, _end_dig_button, _elevator_up, _elevator_down]:
 		if button != null:
 			PIXEL_UI_SCRIPT.apply_button(button, "secondary", 20)
@@ -139,8 +157,16 @@ func _on_elevator_up_pressed() -> void:
 	elevator_up_pressed.emit()
 
 
+func _on_elevator_up_released() -> void:
+	elevator_up_released.emit()
+
+
 func _on_elevator_down_pressed() -> void:
 	elevator_down_pressed.emit()
+
+
+func _on_elevator_down_released() -> void:
+	elevator_down_released.emit()
 
 
 ## Show/hide the prominent "End Dig" / "Prestige" button. When visible the button reads

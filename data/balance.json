@@ -15,8 +15,9 @@
     "max_rows_per_sec": 14.0
   },
   "camera_lookahead_cells": 8,
+  "camera_aim_lookahead_cells": 3,
   "camera_zoom": 2.2,
-  "camera_platform_screen_fraction": 0.65,
+  "camera_platform_screen_fraction": 0.45,
   "sky_band_cells": 40,
   "support_extend_seconds": 0.25,
   "light_radius_px": 260,

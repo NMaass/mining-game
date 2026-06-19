@@ -115,6 +115,14 @@ var _ramp_up := ElevatorRamp.new()
 var _ramp_down := ElevatorRamp.new()
 ## The direction held LAST frame (-1 up / +1 down / 0 none) — so a direction flip resets the ramp.
 var _elevator_held_dir: int = 0
+## On-screen elevator arrow HELD state (set by button_down/button_up signals from the
+## HUD). The keyboard path is polled via Input.is_action_pressed; the on-screen button
+## path uses these flags because `pressed` (release) is too late for a tap and polling
+## `is_pressed()` alone was unreliable for quick taps. button_down sets the flag the
+## instant the arrow is touched, so the hold-poll's first-frame guarantee yields one
+## row for a tap and the flag drives the continuous glide for a hold.
+var _btn_elevator_up: bool = false
+var _btn_elevator_down: bool = false
 
 # ── Layout (all from /data) ───────────────────────────────────────────────────
 var _bps: int = 64
@@ -316,11 +324,18 @@ func _wire_ui() -> void:
 		# Big "End Dig" button mirrors the prestige offer for mouse/touch parity.
 		if not _hud.end_dig_pressed.is_connected(_on_end_dig_pressed):
 			_hud.end_dig_pressed.connect(_on_end_dig_pressed)
-		# Elevator arrows manually move the platform up/down. Movement is driven by the HOLD poll in
-		# _process (_process_elevator_hold) — holding the button glides the platform continuously,
-		# ramping to a capped speed; a tap moves one row. The `pressed` signal is intentionally NOT
-		# wired to a move here (that would double-fire with the hold poll on release); the poll's
-		# first-frame guarantee covers the tap. The signal stays emitted for any other listeners.
+		# Elevator arrows: button_down starts a move (tap or hold), button_up stops it.
+		# The hold poll in _process (_process_elevator_hold) reads the held flags and ramps
+		# the speed — a tap moves one row (the ramp's first-frame guarantee), a hold glides.
+		# `pressed` (release) is NOT wired to a move (it would double-fire with the poll).
+		if not _hud.elevator_up_pressed.is_connected(_on_elevator_up_btn):
+			_hud.elevator_up_pressed.connect(_on_elevator_up_btn)
+		if not _hud.elevator_up_released.is_connected(_on_elevator_up_btn_released):
+			_hud.elevator_up_released.connect(_on_elevator_up_btn_released)
+		if not _hud.elevator_down_pressed.is_connected(_on_elevator_down_btn):
+			_hud.elevator_down_pressed.connect(_on_elevator_down_btn)
+		if not _hud.elevator_down_released.is_connected(_on_elevator_down_btn_released):
+			_hud.elevator_down_released.connect(_on_elevator_down_btn_released)
 	if _platform != null:
 		if not _platform.descended.is_connected(_on_platform_descended):
 			_platform.descended.connect(_on_platform_descended)
@@ -485,6 +500,29 @@ func _on_elevator_down() -> void:
 		_refresh_all_ui()
 
 
+## On-screen elevator UP arrow pressed DOWN (button_down): mark it held so the hold poll
+## (_process_elevator_hold) starts the ramped glide. The poll's first-frame guarantee
+## moves one row immediately (a tap); a sustained hold glides row-by-row. No move here —
+## the poll owns the per-row stepping so there's no double-fire with the release signal.
+func _on_elevator_up_btn() -> void:
+	_btn_elevator_up = true
+
+
+## On-screen elevator UP arrow released (button_up): clear the held flag so the poll stops.
+func _on_elevator_up_btn_released() -> void:
+	_btn_elevator_up = false
+
+
+## On-screen elevator DOWN arrow pressed DOWN (button_down): mark it held.
+func _on_elevator_down_btn() -> void:
+	_btn_elevator_down = true
+
+
+## On-screen elevator DOWN arrow released (button_up): clear the held flag.
+func _on_elevator_down_btn_released() -> void:
+	_btn_elevator_down = false
+
+
 ## The elevator direction currently HELD via the on-screen buttons or the up/down KEY (-1 up,
 ## +1 down, 0 none/both). Polled each frame so HOLDING moves continuously. Buttons take precedence
 ## via is_pressed() (true while a normal button is held); the keyboard actions are also honored so
@@ -492,10 +530,12 @@ func _on_elevator_down() -> void:
 ## buttons may be null and the InputMap actions may be absent.
 func _elevator_input_dir() -> int:
 	var dir: int = 0
-	# On-screen buttons (held). A hidden button (the direction you can't go) is never "pressed".
-	if _elevator_up != null and _elevator_up.visible and _elevator_up.is_pressed():
+	# On-screen buttons (held via button_down/button_up flags — set the instant the arrow
+	# is touched, cleared on release). Replaces is_pressed() polling, which was unreliable
+	# for quick taps (the button could release before a _process frame caught it).
+	if _btn_elevator_up:
 		dir -= 1
-	if _elevator_down != null and _elevator_down.visible and _elevator_down.is_pressed():
+	if _btn_elevator_down:
 		dir += 1
 	# Keyboard (held). Skipped in the editor; guarded on the actions existing.
 	if not Engine.is_editor_hint():

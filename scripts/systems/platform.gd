@@ -42,6 +42,7 @@ var _threshold: int
 var _max_steps: int
 var _tween_seconds: float
 var _lookahead_cells: int
+var _aim_lookahead_cells: int = 0
 var _camera_zoom: float
 var _camera_vertical_offset_px: float = 0.0
 var _support_row: int = 0
@@ -99,6 +100,7 @@ func configure(tables: Dictionary, start_row: int = 0) -> void:
 	_max_steps = Registry.descent_max_steps(tables)
 	_tween_seconds = Registry.descent_tween_seconds(tables)
 	_lookahead_cells = Registry.camera_lookahead_cells(tables)
+	_aim_lookahead_cells = Registry.camera_aim_lookahead_cells(tables)
 	_camera_zoom = Registry.camera_zoom(tables)
 	_target_row = start_row
 	_recompute_camera_vertical_offset()
@@ -210,13 +212,23 @@ func _configure_camera_limits() -> void:
 	_camera.limit_smoothed = true
 
 
-## No-op: the camera must NOT shift horizontally when aiming (UNIT TUNE). Aim-driven
-## horizontal lookahead was removed because the pan was disorienting while lining up a
-## throw. `_look_ahead_cells` stays 0 so the camera keeps its fixed horizontal framing;
-## only the vertical surface framing tracks the platform. Kept as a method so callers
-## (mine.gd) need no change. `angle` is ignored.
-func set_look_ahead(_angle: float) -> void:
-	pass
+## Slight horizontal camera look-ahead toward the aim direction. `angle` is the launch
+## angle (0 = straight down, negative = left, positive = right); `sin(angle)` gives the
+## horizontal component, scaled by the data-driven `camera_aim_lookahead_cells` cap.
+## The camera nudges toward where the charge is headed so the player can see the target,
+## but stays subtle (small cap). Updates the camera target immediately so Camera2D's
+## position smoothing eases the pan (no hard jump). 0 cap → no lookahead (fixed framing).
+func set_look_ahead(angle: float) -> void:
+	if _aim_lookahead_cells <= 0:
+		if _look_ahead_cells != 0:
+			_look_ahead_cells = 0
+			_reanchor_camera()
+		return
+	var target_cells: int = int(round(sin(angle) * float(_aim_lookahead_cells)))
+	if target_cells == _look_ahead_cells:
+		return
+	_look_ahead_cells = target_cells
+	_reanchor_camera()
 
 
 ## Add trauma to the decaying camera-shake model and aim its directional kick AWAY

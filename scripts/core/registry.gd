@@ -328,6 +328,12 @@ static func elevator_max_rows_per_sec(tables: Dictionary) -> float:
 static func camera_lookahead_cells(tables: Dictionary) -> int:
 	return int(balance(tables, "camera_lookahead_cells"))
 
+## Slight horizontal camera look-ahead toward the aim direction (cells). The camera
+## nudges toward where the charge is going so the player can see the target area.
+## Small by design ("slight") — 0 disables. Data-driven.
+static func camera_aim_lookahead_cells(tables: Dictionary) -> int:
+	return maxi(0, int(balance(tables, "camera_aim_lookahead_cells", 0)))
+
 static func camera_platform_screen_fraction(tables: Dictionary) -> float:
 	return float(balance(tables, "camera_platform_screen_fraction", 0.5))
 
