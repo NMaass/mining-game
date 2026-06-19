@@ -4,8 +4,8 @@ Portrait, physics-driven mining game (Godot 4.6.x). This repo is the **MVP verti
 (SPEC §6 steps 1–3: destructible block core + finite run + money), built to a **machine-verifiable
 contract** so AI workflows can construct it reliably.
 
-- **Design:** `spec/SPEC.md` (**v0.4**) — *what* + acceptance criteria (`AC-x.y.z`).
-- **Engine conventions:** `spec/AGENTS.md` / `CLAUDE.md` — *how* (v0.4).
+- **Design:** `spec/SPEC.md` (**v0.6**) — *what* + acceptance criteria (`AC-x.y.z`).
+- **Engine conventions:** `spec/AGENTS.md` / `CLAUDE.md` — *how* (v0.6).
 - **MVP build contract:** `spec/VERTICAL_SLICE.md` — the slice decomposed into 10 verifiable units;
   its **§0 is the v0.3→v0.4 salvage map** (the authoritative to-do).
 - **AC→test coverage:** `reports/spec-coverage.md` — the traceability matrix (read this first).
@@ -30,16 +30,23 @@ tools/run_tests.sh tests/unit/test_block_gen.gd   # one suite (fast loop)
 
 Reports land in `reports/`. CI runs both on every push (`.github/workflows/ci.yml`).
 
-Current state (2026-06-15 08:30): **v0.4 slice complete + independently audited** —
-**329 tests, both gates green.** The full core loop is real (FastNoiseLite gen → fuzzy seeded blast →
-ore→money → relic ends the dig → minimal prestige makes the next dig stronger), wired through a thin
-`mine.gd` controller over an authored `mine.tscn`. A 21-agent adversarial AC-faithfulness audit took
-the slice from 33→40 PROVEN ACs (the old P0s — bounce-accurate preview, charge detonation coverage,
-real scene smoke — are **resolved or obsoleted by the v0.4 pivot**); the 17:30 run pulled **audio
-(AC-5.13.x)** in and restated **AC-5.5.2 loot** to a gate-enforced invariant. The **22:30 run landed
-non-color block identity (AC-5.10.2/5.10.3)** — previously inert (every block type rendered as the
-*same* magenta placeholder): a pure `block_art.gd` now generates per-type **colour** (data-driven
-colorblind-safe `palette.json`, luminance-contrast gate-enforced) + a shared **glyph overlay** +
+Current state (2026-06-19): **v0.6 slice + best-practices audit pass.** The full core loop is real
+(FastNoiseLite gen → fuzzy seeded blast → ore→money → relic ends the dig → minimal prestige makes
+the next dig stronger), wired through a thin `mine.gd` controller over an authored `mine.tscn`.
+A 4-subagent read-only audit + vetting pass landed fixes across correctness, performance, tests,
+conventions, and docs — see the commit history for details. The v0.5 bounded-mine + physical-platform
+design was reconciled to the v0.6 shipped code (infinite shaft + visual platform) in SPEC/AGENTS.
+Pre-existing v0.6 golden-gen drift (`test_block_gen`) is noted, not hidden. Remaining gaps are
+documented in `reports/spec-coverage.md`: ROADMAP seams — real art/SFX assets, the Hub/Shop/Upgrades
+overlay tabs + mine-select/buy-access (AC-5.12.3/4), and OS reduced-motion seeding (AC-5.10.4). A
+Credits panel (AC-5.8.7) and manual save export/import (the export/import half of AC-5.11.5) now
+live in the Settings overlay; full web IndexedDB persistence remains ROADMAP.
+
+> **Historical (v0.4 slice, 2026-06-15):** independently audited, 329 tests, both gates green. A
+> 21-agent adversarial AC-faithfulness audit took the slice from 33→40 PROVEN ACs. The 22:30 run
+> landed non-color block identity (AC-5.10.2/5.10.3): a pure `block_art.gd` generates per-type
+> **colour** (data-driven colorblind-safe `palette.json`, luminance-contrast gate-enforced) + a
+> shared **glyph overlay** +
 crack art, plus a tray **tier glyph**; a live screenshot caught + fixed a magenta placeholder
 **platform**; and the last **4 WEAK ACs are now PROVEN** (0 WEAK remain). Visual evidence:
 `reports/block_art_render.png` (`tools/screenshot.gd`). The same run also landed **save/persistence

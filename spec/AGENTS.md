@@ -4,11 +4,14 @@ This file is for the AI building the game. It holds the facts an agent needs to 
 this repo without rediscovering them or guessing. It is NOT the design — design lives in
 `SPEC.md`. Read `SPEC.md` first for *what*; read this for *how*.
 
-> Reconciled with **SPEC.md v0.4.2** (2026-06-15 Motherload reference note). v0.4 **dropped**
-> cross-platform physics determinism and the bounce-accurate "preview == actual" arc; v0.4.2 names
-> **Motherload** as the primary look/feel reference and adds a platform-as-lid guardrail. When this
-> file and `SPEC.md`/`CLAUDE.md` disagree, the spec wins. (`CLAUDE.md` is the v0.4.2 fast path; keep
-> it and this file in sync.)
+> Reconciled with **SPEC.md v0.6.0** (2026-06-19 docs-to-code reconciliation). v0.5 proposed bounded
+> rectangular mines + a physical platform; v0.6 reverts both to match the shipped code: an **infinite
+> shaft** (`mine_height_cells: 0` sentinel) and a **visual platform** (charges pass through it,
+> `collision_mask=1` = terrain-only). Prestige is still **exactly 1 point per relic**; money is
+> per-dig only and does not convert to prestige. There is no passive income. v0.4 **dropped**
+> cross-platform physics determinism and the bounce-accurate "preview == actual" arc. **Motherload**
+> remains the primary look/feel reference. When this file and `SPEC.md`/`CLAUDE.md` disagree, the spec
+> wins. (`CLAUDE.md` is the fast path; keep it and this file in sync.)
 
 ---
 
@@ -44,10 +47,12 @@ this repo without rediscovering them or guessing. It is NOT the design — desig
 ## Hard conventions
 
 - **Tunables are data, never code.** Explosive stats, depth-band loot tables, pack weights, prices,
-  blast maps, and platform-clear thresholds live in `/data` as **JSON, schema-validated on load**.
-  Changing balance must never require editing a script. (Resources are fine for read-only authored
-  content shipped in the export, e.g. an explosive pointing at a particle resource — but not for the
-  numeric balance tables, and never for read-write save data decoded blindly.)
+  blast maps, and platform-clear thresholds live in `/data` as **JSON, validated by the `DataValidator`
+  CI gate** (ad-hoc GDScript rules + JSON schemas in `data/schemas/` where present). Changing balance
+  must never require editing a script. (Resources are fine for read-only authored content shipped in
+  the export, e.g. an explosive pointing at a particle resource — but not for the numeric balance
+  tables, and never for read-write save data decoded blindly.) Load-time schema validation is a ROADMAP
+  hardening item; the v0.6 shipping contract is CI-gate validation, not load-time validation.
 - **One canonical block-type registry.** Block type id is the join key: id → {hardness, max_hp (or a
   formula from hardness, computed once), loot ref, value}. Depth bands and loot tables reference
   block types by id (foreign-key style), never redefine their values. Validate that every referenced
@@ -59,20 +64,25 @@ this repo without rediscovering them or guessing. It is NOT the design — desig
 - **Physics shapes are primitives — for dynamic bodies.** Charge/collectible colliders are
   circles/capsules regardless of pixel art. **Terrain block colliders are square tiles** on the
   TileMap physics layer (blocks must read as blocks). Visual sprite ≠ collision shape.
-- **Collision masks are explicit constants/data.** Charge ↔ terrain + platform only (clean feel),
-  but launcher/platform geometry must leave the default downward entry path into the mine clear; it
-  must not behave like a solid lid over the shaft. Collectibles ↔ terrain only (never each other or
-  the charge); particles never collide. Launched charges use continuous collision detection to avoid
-  tunneling. (Authored on `charge.tscn`:
-  `collision_layer=2`, `collision_mask=5`, `contact_monitor=true` — needed for `body_entered`.)
+- **Collision masks are explicit constants/data.** Charge ↔ terrain only (v0.6: the platform is a
+  visual anchor, not a physics body, so charges pass through it — `collision_layer=2`,
+  `collision_mask=1`, `contact_monitor=true`. The v0.5-pinned `mask=5` (charge↔terrain+platform) is a
+  ROADMAP option if a physical platform is added). Launcher/platform geometry must leave the default
+  downward entry path into the mine clear; it must not behave like a solid lid over the shaft.
+  Collectibles ↔ terrain only (never each other or the charge); particles never collide. Launched
+  charges use continuous collision detection to avoid tunneling.
 - **Particles for cosmetics, rigid bodies only for collectibles.** Never spawn per-pixel rigid
   bodies. Pool and cap collectible bodies; settled bodies sleep; the cap is expressed in **active
-  (awake)** bodies with separate web/mobile and desktop values in `/data`.
-- **One block grid.** The mine is a single chunked `TileMapLayer` of typed square blocks, with a
-  sliding window of resident chunks (recycle off-screen) so resident cell count stays bounded.
-  Generation sets block types (pure function of saved seed + absolute cell). Destruction removes
-  blocks in a radius by a grid walk over the per-cell HP array (no physics queries, no full-map
-  scan). Do not implement marching squares, value-density fields, or smooth contours — squares only.
+  (awake)** bodies with separate web/mobile and desktop values in `/data`. (v0.6 note: `active_body_cap_*`
+  is validated but not enforced at runtime because v0.6 has no physics collectibles — coins are tweened
+  `Sprite2D`s. The cap is a forward placeholder; enforce it if/when physics collectibles are reintroduced.)
+- **One block grid.** The mine is a single chunked `TileMapLayer` of typed square blocks in an
+  infinite-depth shaft (v0.6: `mine_height_cells: 0` is the infinite sentinel; width is fixed in `/data`),
+  with a sliding window of resident chunks (recycle off-screen) so resident cell count stays bounded.
+  Generation sets block types (pure function of saved seed + absolute cell). Destruction removes blocks
+  in a radius by a grid walk over the per-cell HP array (no physics queries, no full-map scan). Do not
+  implement marching squares, value-density fields, or smooth contours — squares only. (Bounded
+  per-mine `width_cells`×`depth_cells` volumes are a ROADMAP option, not the v0.6 shipping plan.)
 - **Damage overlay is a dedicated second TileMapLayer** sharing the chunk coordinate config and
   using the single shared 0..N crack-stage TileSet, `set_cell`'d in parallel with the base layer.
   Do NOT bake crack stage into base-tile alternatives (combinatorial blowup) and do NOT draw

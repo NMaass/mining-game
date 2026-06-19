@@ -7,16 +7,23 @@ on:
 
 env:
   GODOT_VERSION: "4.6.3"
+  GODOT_RELEASE: "4.6.3-stable"
+  GODOT_LINUX_SHA512: "a035258da32b77f966a5376f9fa29c30a6adde826a85ba918e1605bd1fc9823eba7d85f1dd5e748956bd2ba72827c0025ffa11bb82aec91128c407a2e723c99c"
+  GODOT_TEMPLATES_SHA512: "da606b61c10157844f8300172df374472665f95015495cb1a7cd132c40ede404faa96cc1016a4b9662db9909ddea69632c4948b2cd11163438dad4808881fb68"
+
+permissions:
+  contents: read
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Cache Godot
         id: cache-godot
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/godot-bin
           key: godot-${{ env.GODOT_VERSION }}-linux
@@ -24,18 +31,40 @@ jobs:
       - name: Download Godot ${{ env.GODOT_VERSION }} (headless-capable)
         if: steps.cache-godot.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           mkdir -p ~/godot-bin
-          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          curl -sSL -o /tmp/godot.zip "$URL"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+          curl --fail --location --show-error --silent -o /tmp/godot.zip "$URL"
+          echo "${GODOT_LINUX_SHA512}  /tmp/godot.zip" | sha512sum -c -
           unzip -o /tmp/godot.zip -d ~/godot-bin
-          mv ~/godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot-bin/godot
+          mv ~/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64 ~/godot-bin/godot
           chmod +x ~/godot-bin/godot
+
+      - name: Cache Godot export templates
+        id: cache-godot-templates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable
+          key: godot-${{ env.GODOT_VERSION }}-export-templates
+
+      - name: Download Godot export templates
+        if: steps.cache-godot-templates.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          template_dir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$template_dir"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+          curl --fail --location --show-error --silent -o /tmp/godot_templates.tpz "$URL"
+          echo "${GODOT_TEMPLATES_SHA512}  /tmp/godot_templates.tpz" | sha512sum -c -
+          rm -rf /tmp/godot_templates
+          unzip -q -o /tmp/godot_templates.tpz -d /tmp/godot_templates
+          cp -R /tmp/godot_templates/templates/. "$template_dir/"
 
       - name: Expose Godot on PATH
         run: echo "$HOME/godot-bin" >> "$GITHUB_PATH"
 
       - name: Import project (build class cache + GDExtensions)
-        run: godot --headless --path . --import || true
+        run: godot --headless --path . --import
 
       - name: Gate 1 — data integrity
         run: tools/validate_data.sh
@@ -43,10 +72,27 @@ jobs:
       - name: Gate 2 — headless test suite
         run: tools/run_tests.sh tests
 
+      - name: Gate 3 — Web export smoke
+        run: |
+          set -euo pipefail
+          mkdir -p build/web
+          godot --headless --path . --export-release Web build/web/index.html
+          cp deploy/web/_headers build/web/_headers
+          test -s build/web/index.html
+          test -s build/web/index.wasm
+
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gdunit-report
           path: reports/
+          if-no-files-found: ignore
+
+      - name: Upload web export
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: web-export
+          path: build/web/
           if-no-files-found: ignore

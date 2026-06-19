@@ -161,7 +161,7 @@ static func depth_odds_at(tables: Dictionary, depth_cells: int) -> Dictionary:
 
 ## Backwards-compatible alias for the HUD odds readout.
 static func band_odds(tables: Dictionary, depth_cells: int) -> Dictionary:
-	return depth_odds_at(tables, depth_cells)
+	return full_odds_at(tables, depth_cells)
 
 # ── Explosive lookup ────────────────────────────────────────────────────────
 
@@ -521,6 +521,29 @@ static func ui_flash_seconds(tables: Dictionary) -> float:
 static func ui_tray_pop_seconds(tables: Dictionary) -> float:
 	return float(balance(tables, "ui_tray_pop_seconds"))
 
+## Charge selector timing/motion tunables. These are presentation values, but still live in /data so
+## UI feel can be tuned without script edits (AC-5.5.4 / AC-5.8.2 / AC-5.10.1).
+static func ui_selector(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("ui_selector", {})
+	return x if x is Dictionary else {}
+
+static func ui_selector_f(tables: Dictionary, key: String, default_value: float = 0.0) -> float:
+	return float(ui_selector(tables).get(key, default_value))
+
+static func ui_selector_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
+	return int(ui_selector(tables).get(key, default_value))
+
+## Crate-reveal timing/motion tunables. Used by CrateReveal only; pack rolls remain in RunState.
+static func ui_crate(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("ui_crate", {})
+	return x if x is Dictionary else {}
+
+static func ui_crate_f(tables: Dictionary, key: String, default_value: float = 0.0) -> float:
+	return float(ui_crate(tables).get(key, default_value))
+
+static func ui_crate_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
+	return int(ui_crate(tables).get(key, default_value))
+
 # ── Settings defaults + ranges (AC-5.10.1) ────────────────────────────────────
 ## The `balance.settings` sub-table: the data-driven default values + ranges the
 ## Settings UI seeds from (SFX/Music volume, motion intensity, UI text scale). Empty
@@ -607,15 +630,124 @@ static func relic_prestige_value(tables: Dictionary) -> int:
 	return 0
 
 ## Half-width (cells) of the center band the relic column is confined to: the relic
-## column satisfies |relic_col - center_col| <= relic_band_half_cells (a 13-wide band at
-## 6). Keeps the relic on the descent corridor in the infinite shaft (AC-5.6.1). Reads 6
+## column satisfies |relic_col - center_col| <= relic_band_half_cells (an 11-wide band at
+## 5). Keeps the relic on the descent corridor in the infinite shaft (AC-5.6.1). Reads 5
 ## if absent so an un-migrated relics.json still confines the column reasonably; the data
 ## gate enforces presence + that the band fits the configured width.
 static func relic_band_half_cells(tables: Dictionary) -> int:
 	var relics: Variant = tables.get("relics")
 	if relics is Dictionary:
-		return int((relics as Dictionary).get("relic_band_half_cells", 6))
-	return 6
+		return int((relics as Dictionary).get("relic_band_half_cells", 5))
+	return 5
+
+## The depth by which the relic is GUARANTEED to have appeared (the power-CDF max; the
+## mine is completable because descending to here always crosses the relic). Reads 9000
+## if absent; the data gate enforces min_depth < guaranteed <= cap_depth_cells.
+static func relic_guaranteed_depth_cells(tables: Dictionary) -> int:
+	var relics: Variant = tables.get("relics")
+	if relics is Dictionary:
+		return int((relics as Dictionary).get("relic_guaranteed_depth_cells", 9000))
+	return 9000
+
+## Back-load exponent k for the relic depth power-CDF (higher = rarer shallow). Reads 4
+## if absent; the data gate enforces > 1.
+static func relic_back_load_k(tables: Dictionary) -> int:
+	var relics: Variant = tables.get("relics")
+	if relics is Dictionary:
+		return maxi(2, int((relics as Dictionary).get("relic_back_load_k", 4)))
+	return 4
+
+## The relic's in-world glow color (the purple objective beacon). White if absent/invalid.
+static func relic_glow_color(tables: Dictionary) -> Color:
+	var relics: Variant = tables.get("relics")
+	if relics is Dictionary:
+		var hex: String = str((relics as Dictionary).get("glow_color", "#a64bff"))
+		if Color.html_is_valid(hex):
+			return Color.html(hex)
+	return Color(0.65, 0.29, 1.0, 1.0)
+
+## The relic glow pulse period (seconds). Reads 1.6 if absent; the data gate enforces > 0.
+static func relic_glow_pulse_seconds(tables: Dictionary) -> float:
+	var relics: Variant = tables.get("relics")
+	if relics is Dictionary:
+		return float((relics as Dictionary).get("glow_pulse_seconds", 1.6))
+	return 1.6
+
+## The 2×2 relic top-left anchor for a mine seed (delegates to BlockGen). Pure fn of seed.
+static func relic_anchor(tables: Dictionary, mine_seed: int) -> Vector2i:
+	return BlockGen.relic_anchor(tables, mine_seed)
+
+# ── Ore overlay layer (continuous gen, v0.7) ──────────────────────────────────
+## The per-ore noise-overlay table (data/ore_overlays.json): the richness layer stamped
+## over the base depth-curve filler. {} if absent (invalid — the data gate enforces it).
+static func ore_overlays(tables: Dictionary) -> Dictionary:
+	var o: Variant = tables.get("ore_overlays")
+	return o if o is Dictionary else {}
+
+## The ore-overlay definitions sorted RAREST-FIRST (ascending `priority`, index 0 = rarest,
+## evaluated first → first hit wins). Each entry is the ore's dict from ore_overlays.ores.
+## The walk order is deterministic (sorted by the unique, validated `priority`).
+static func ore_priority(tables: Dictionary) -> Array:
+	var ov: Dictionary = ore_overlays(tables)
+	var ores: Variant = ov.get("ores")
+	if not (ores is Dictionary):
+		return []
+	var rows: Array = []
+	for id in (ores as Dictionary).keys():
+		var o: Variant = (ores as Dictionary)[id]
+		if o is Dictionary:
+			rows.append(o)
+	rows.sort_custom(func(a, b): return int(a.get("priority", 0)) < int(b.get("priority", 0)))
+	return rows
+
+## The analytic ore-odds proxy at depth `y` for one ore id: clamp(1 - threshold(s(y)), 0, 1),
+## 0 below the ore's depth_min. Monotone in depth (threshold falls with depth). Used by the
+## HUD odds chip + the validator reward check (the same 1-threshold formula). NOT the field-
+## integrated truth — an upper bound — but monotone, which is what the reward invariant needs.
+static func ore_odds_at(tables: Dictionary, ore_id: String, y: int) -> float:
+	var ov: Dictionary = ore_overlays(tables)
+	var ores: Variant = ov.get("ores")
+	if not (ores is Dictionary) or not (ores as Dictionary).has(ore_id):
+		return 0.0
+	var o: Dictionary = (ores as Dictionary)[ore_id]
+	if y < int(o.get("depth_min", 0)):
+		return 0.0
+	var s: float = depth_curve_s(tables, y)
+	var shallow: float = float(o.get("threshold_shallow", 1.0))
+	var deep: float = float(o.get("threshold_deep", 1.0))
+	var thr: float = shallow + s * (deep - shallow)
+	return clampf(1.0 - thr, 0.0, 1.0)
+
+## The combined per-block odds at depth `y` for the HUD: folds the ore-overlay odds into the
+## base filler odds with the SAME priority-reduction budget the generator uses (rarest eats
+## first). Returns {block_id: probability} summing to ~1. Snapped to hud_sample_band_cells so
+## the readout doesn't flicker per row. This is what the odds chip must show (real ore chances,
+## not just filler) — AC-5.8.8 over the continuous-gen layers.
+static func full_odds_at(tables: Dictionary, depth_cells: int) -> Dictionary:
+	var bucket: int = hud_sample_band_cells(tables)
+	@warning_ignore("integer_division")
+	var snapped: int = (maxi(0, depth_cells) / bucket) * bucket
+	var out: Dictionary = {}
+	var remaining: float = 1.0
+	for o in ore_priority(tables):  # rarest-first, matching the generator
+		var bid: String = str(o.get("block_id", ""))
+		if bid.is_empty():
+			continue
+		var odds: float = ore_odds_at(tables, bid, snapped) * remaining
+		if odds > 0.0:
+			out[bid] = out.get(bid, 0.0) + odds
+			remaining -= odds
+	if remaining < 0.0:
+		remaining = 0.0
+	# The base filler fills the remaining cell-coverage budget, split by its weight table.
+	var weights: Dictionary = depth_weights_at(tables, snapped)
+	var total: float = 0.0
+	for k in weights.keys():
+		total += float(weights[k])
+	if total > 0.0:
+		for k in weights.keys():
+			out[k] = out.get(k, 0.0) + remaining * (float(weights[k]) / total)
+	return out
 
 # ── Prestige upgrades (AC-5.6.4, AC-5.12.x) ──────────────────────────────────
 ## Returns the prestige-upgrade definition dict for the given id, or {} if unknown.

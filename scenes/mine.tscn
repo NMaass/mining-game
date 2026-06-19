@@ -32,6 +32,19 @@ bg_color = Color(0.07, 0.075, 0.1, 0.95)
 border_width_top = 3
 border_color = Color(0.4, 0.43, 0.52, 0.95)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_selectorbar"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.05, 0.055, 0.08, 0.6)
+border_width_bottom = 2
+border_color = Color(0.3, 0.33, 0.42, 0.6)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_left = 4
+corner_radius_bottom_right = 4
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_primarybtn"]
 content_margin_left = 12.0
 content_margin_top = 8.0
@@ -379,25 +392,34 @@ offset_right = 720.0
 offset_bottom = 1280.0
 theme_override_styles/panel = SubResource("StyleBoxFlat_bottombar")
 
-[node name="Bottom" type="HBoxContainer" parent="Hud"]
+[node name="Bottom" type="VBoxContainer" parent="Hud"]
 offset_left = 16.0
-offset_top = 1160.0
+offset_top = 1070.0
 offset_right = 704.0
 offset_bottom = 1240.0
-theme_override_constants/separation = 16
+theme_override_constants/separation = 8
 
-[node name="TrayScroll" type="ScrollContainer" parent="Hud/Bottom"]
-custom_minimum_size = Vector2(0, 76)
+[node name="SelectorBar" type="PanelContainer" parent="Hud/Bottom"]
+custom_minimum_size = Vector2(0, 88)
+theme_override_styles/panel = SubResource("StyleBoxFlat_selectorbar")
+
+[node name="TrayScroll" type="ScrollContainer" parent="Hud/Bottom/SelectorBar"]
+custom_minimum_size = Vector2(0, 80)
 size_flags_horizontal = 3
 horizontal_scroll_mode = 1
 vertical_scroll_mode = 0
 
-[node name="Tray" type="HBoxContainer" parent="Hud/Bottom/TrayScroll"]
+[node name="Tray" type="HBoxContainer" parent="Hud/Bottom/SelectorBar/TrayScroll"]
 theme_override_constants/separation = 8
 script = ExtResource("5_tray")
 
-[node name="ThrowButton" type="Button" parent="Hud/Bottom"]
+[node name="ActionRow" type="HBoxContainer" parent="Hud/Bottom"]
+custom_minimum_size = Vector2(0, 72)
+theme_override_constants/separation = 16
+
+[node name="ThrowButton" type="Button" parent="Hud/Bottom/ActionRow"]
 custom_minimum_size = Vector2(160, 72)
+size_flags_horizontal = 3
 text = "THROW"
 theme_override_fonts/font = ExtResource("11_pixelfont")
 theme_override_font_sizes/font_size = 24
@@ -405,7 +427,7 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_primarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_primarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_primarybtn_hover")
 
-[node name="CooldownFill" type="ColorRect" parent="Hud/Bottom/ThrowButton"]
+[node name="CooldownFill" type="ColorRect" parent="Hud/Bottom/ActionRow/ThrowButton"]
 visible = false
 layout_mode = 1
 anchors_preset = 10
@@ -415,7 +437,7 @@ grow_horizontal = 2
 mouse_filter = 2
 color = Color(0.08, 0.09, 0.12, 0.74)
 
-[node name="CooldownLabel" type="Label" parent="Hud/Bottom/ThrowButton"]
+[node name="CooldownLabel" type="Label" parent="Hud/Bottom/ActionRow/ThrowButton"]
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
@@ -434,7 +456,7 @@ theme_override_fonts/font = ExtResource("11_pixelfont")
 theme_override_font_sizes/font_size = 24
 text = ""
 
-[node name="BuyPackButton" type="Button" parent="Hud/Bottom"]
+[node name="BuyPackButton" type="Button" parent="Hud/Bottom/ActionRow"]
 custom_minimum_size = Vector2(120, 72)
 text = "SHOP"
 theme_override_fonts/font = ExtResource("11_pixelfont")
@@ -443,7 +465,7 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_secondarybtn")
 theme_override_styles/hover = SubResource("StyleBoxFlat_secondarybtn_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_secondarybtn_hover")
 
-[node name="MinesButton" type="Button" parent="Hud/Bottom"]
+[node name="MinesButton" type="Button" parent="Hud/Bottom/ActionRow"]
 custom_minimum_size = Vector2(120, 72)
 text = "MINES"
 theme_override_fonts/font = ExtResource("11_pixelfont")

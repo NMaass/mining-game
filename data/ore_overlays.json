@@ -1,0 +1,11 @@
+{
+  "priority_order": ["diamond", "ore_gem", "ore_gold", "ore_silver", "ore_copper", "coal"],
+  "ores": {
+    "coal":       { "block_id": "coal",       "field_salt": 101, "frequency": 0.060, "depth_min": 0,  "threshold_shallow": 0.965, "threshold_deep": 0.82, "priority": 5 },
+    "ore_copper": { "block_id": "ore_copper", "field_salt": 211, "frequency": 0.085, "depth_min": 0,  "threshold_shallow": 0.940, "threshold_deep": 0.74, "priority": 4 },
+    "ore_silver": { "block_id": "ore_silver", "field_salt": 307, "frequency": 0.110, "depth_min": 0,  "threshold_shallow": 0.975, "threshold_deep": 0.80, "priority": 3 },
+    "ore_gold":   { "block_id": "ore_gold",   "field_salt": 419, "frequency": 0.130, "depth_min": 40, "threshold_shallow": 0.965, "threshold_deep": 0.82, "priority": 2 },
+    "ore_gem":    { "block_id": "ore_gem",    "field_salt": 523, "frequency": 0.170, "depth_min": 80, "threshold_shallow": 0.985, "threshold_deep": 0.86, "priority": 1 },
+    "diamond":    { "block_id": "diamond",    "field_salt": 631, "frequency": 0.230, "depth_min": 0,  "threshold_shallow": 0.998, "threshold_deep": 0.94, "priority": 0 }
+  }
+}

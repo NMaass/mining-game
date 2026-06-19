@@ -8,5 +8,6 @@ if [ -z "${GODOT_BIN}" ] || [ ! -x "${GODOT_BIN}" ]; then
   echo "ERROR: Godot binary not found. Set GODOT_BIN or put 'godot' on PATH." >&2
   exit 2
 fi
-"${GODOT_BIN}" --headless --path . --import >/dev/null 2>&1 || true
-"${GODOT_BIN}" --headless --path . -s res://tools/validate_data.gd
+LOG_FILE="${TMPDIR:-/tmp}/mining_game_validate.log"
+"${GODOT_BIN}" --headless --path . --log-file "${LOG_FILE}" --import
+"${GODOT_BIN}" --headless --path . --log-file "${LOG_FILE}" -s res://tools/validate_data.gd

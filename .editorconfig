@@ -1,0 +1,31 @@
+# EditorConfig — https://editorconfig.org
+# Godot 4.x / GDScript conventions: tabs, UTF-8, LF, 100-char soft wrap.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = tab
+indent_size = 4
+
+[*.{json,tscn,tres,gdshader,cfg}]
+indent_style = tab
+indent_size = 4
+
+[*.{md,txt}]
+trim_trailing_whitespace = false
+max_line_length = off
+
+[*.py]
+indent_style = tab
+indent_size = 4
+
+[*.sh]
+indent_style = tab
+indent_size = 4
+
+[Makefile]
+indent_style = tab

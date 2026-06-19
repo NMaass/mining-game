@@ -1,21 +1,16 @@
 {
   "sky_band_cells": 40,
   "surface_depth_cells": 0,
-  "cap_depth_cells": 600,
+  "cap_depth_cells": 10000,
   "curve": "smoothstep",
-  "hud_sample_band_cells": 25,
+  "hud_sample_band_cells": 40,
   "surface_weights": {
-    "dirt": 62,
-    "rock": 26,
-    "ore_copper": 10,
-    "ore_silver": 2
+    "dirt": 70,
+    "rock": 28,
+    "hard_rock": 2
   },
   "cap_weights": {
-    "rock": 24,
-    "hard_rock": 26,
-    "ore_copper": 14,
-    "ore_silver": 14,
-    "ore_gold": 18,
-    "ore_gem": 4
+    "rock": 30,
+    "hard_rock": 70
   }
 }

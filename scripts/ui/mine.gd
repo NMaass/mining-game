@@ -38,6 +38,7 @@ const MUZZLE_FLASH_SCENE := preload("res://scenes/muzzle_flash.tscn")
 const VALUE_POPUP_SCENE := preload("res://scenes/value_popup.tscn")
 const COIN_PICKUP_SCENE := preload("res://scenes/coin_pickup.tscn")
 const DEBUG_OVERLAY_SCRIPT := preload("res://scripts/ui/debug_overlay.gd")
+const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
 const CHUNK_WINDOW_HALF := 3
 ## Floor on cosmetic explosion particles at the lowest motion-intensity setting — keeps the
 ## detonation readable (a minimal puff) for reduced-motion players without disabling the cue
@@ -57,12 +58,12 @@ const EXPLOSION_MOTION_FLOOR := 0.12
 @onready var _preview_line: AimLine = get_node_or_null("AimPreview")
 @onready var _aim_reticle: Sprite2D = get_node_or_null("AimReticle")
 @onready var _hud: Hud = get_node_or_null("Hud")
-@onready var _tray: TrayUi = get_node_or_null("Hud/Bottom/TrayScroll/Tray")
-@onready var _throw_button: Button = get_node_or_null("Hud/Bottom/ThrowButton")
-@onready var _cooldown_fill: ColorRect = get_node_or_null("Hud/Bottom/ThrowButton/CooldownFill")
-@onready var _cooldown_label: Label = get_node_or_null("Hud/Bottom/ThrowButton/CooldownLabel")
-@onready var _buy_pack_button: Button = get_node_or_null("Hud/Bottom/BuyPackButton")
-@onready var _mine_select_button: Button = get_node_or_null("Hud/Bottom/MinesButton")
+@onready var _tray: TrayUi = get_node_or_null("Hud/Bottom/SelectorBar/TrayScroll/Tray")
+@onready var _throw_button: Button = get_node_or_null("Hud/Bottom/ActionRow/ThrowButton")
+@onready var _cooldown_fill: ColorRect = get_node_or_null("Hud/Bottom/ActionRow/ThrowButton/CooldownFill")
+@onready var _cooldown_label: Label = get_node_or_null("Hud/Bottom/ActionRow/ThrowButton/CooldownLabel")
+@onready var _buy_pack_button: Button = get_node_or_null("Hud/Bottom/ActionRow/BuyPackButton")
+@onready var _mine_select_button: Button = get_node_or_null("Hud/Bottom/ActionRow/MinesButton")
 @onready var _elevator_up: Button = get_node_or_null("Hud/ElevatorControls/ElevatorUp")
 @onready var _elevator_down: Button = get_node_or_null("Hud/ElevatorControls/ElevatorDown")
 @onready var _dig_end_panel: DigEndPanel = get_node_or_null("Hud/DigEndPanel")
@@ -95,6 +96,12 @@ var _active_popups: int = 0
 ## vein can't spawn unbounded coin sprites on the single-threaded web budget; over-budget credits
 ## still land in the rolling count-up. Decremented when each coin's ttl frees it.
 var _active_coins: int = 0
+## Persistent in-world beacon for the 2x2 relic footprint. The relic block itself is a
+## normal generated tile (`relic`), while this additive sprite makes the objective read as
+## purple/glowing when it enters the camera view. Purely visual; collection is still owned by
+## BlockGrid's 4-cell footprint latch.
+var _relic_glow: Sprite2D = null
+var _relic_glow_time: float = 0.0
 
 # ── Elevator hold-to-move ramp (continuous row-by-row glide while held) ────────
 ## Pure ramp integrators (one per direction) that turn held time into whole-row steps. Holding the
@@ -157,7 +164,11 @@ func _save_progress() -> void:
 		var state: Dictionary = {"prestige": _run_state.prestige.to_state()}
 		if _settings != null:
 			state["settings"] = _settings.to_state()
-		_save.save_state(state)
+		var ok: bool = _save.save_state(state)
+		if not ok:
+			var logger: Node = get_node_or_null("/root/GameLog")
+			if logger != null and logger.has_method("report_error"):
+				logger.call("report_error", "Mine", "Save failed — durable state may not have persisted")
 
 
 ## Autosave on focus-out / app pause (AC-5.11.4: don't rely on PAUSED alone — also catch focus-out,
@@ -319,10 +330,20 @@ func _wire_ui() -> void:
 			_tray.slot_selected.connect(_on_tray_slot_selected)
 	if _throw_button != null and not _throw_button.pressed.is_connected(_on_throw_button):
 		_throw_button.pressed.connect(_on_throw_button)
+		PIXEL_UI_SCRIPT.apply_button(_throw_button, "primary", 24)
+		PIXEL_UI_SCRIPT.bind_button_feel(_throw_button, Callable(self, "_motion_intensity"))
 	if _buy_pack_button != null and not _buy_pack_button.pressed.is_connected(_on_buy_pack_button):
 		_buy_pack_button.pressed.connect(_on_buy_pack_button)
+		PIXEL_UI_SCRIPT.apply_button(_buy_pack_button, "secondary", 18)
+		PIXEL_UI_SCRIPT.bind_button_feel(_buy_pack_button, Callable(self, "_motion_intensity"))
 	if _mine_select_button != null and not _mine_select_button.pressed.is_connected(_on_mine_select_button):
 		_mine_select_button.pressed.connect(_on_mine_select_button)
+		PIXEL_UI_SCRIPT.apply_button(_mine_select_button, "secondary", 18)
+		PIXEL_UI_SCRIPT.bind_button_feel(_mine_select_button, Callable(self, "_motion_intensity"))
+	for button in [_elevator_up, _elevator_down]:
+		if button != null:
+			PIXEL_UI_SCRIPT.apply_button(button, "secondary", 22)
+			PIXEL_UI_SCRIPT.bind_button_feel(button, Callable(self, "_motion_intensity"))
 	if _dig_end_panel != null:
 		_dig_end_panel.configure(_tables)  # data-driven pop-in duration
 		if not _dig_end_panel.buy_upgrade_pressed.is_connected(_on_panel_buy_upgrade):
@@ -345,6 +366,8 @@ func _wire_ui() -> void:
 			_shop_modal.buy_pressed.connect(_on_shop_buy_pressed)
 		if not _shop_modal.buy_upgrade_pressed.is_connected(_on_shop_buy_upgrade):
 			_shop_modal.buy_upgrade_pressed.connect(_on_shop_buy_upgrade)
+		if not _shop_modal.closed.is_connected(_on_shop_closed):
+			_shop_modal.closed.connect(_on_shop_closed)
 	if _mine_select != null:
 		_mine_select.configure(
 			_tables,
@@ -355,6 +378,8 @@ func _wire_ui() -> void:
 			_mine_select.unlock_pressed.connect(_on_mine_unlock_pressed)
 		if not _mine_select.enter_pressed.is_connected(_on_mine_enter_pressed):
 			_mine_select.enter_pressed.connect(_on_mine_enter_pressed)
+		if not _mine_select.closed.is_connected(_on_mine_select_closed):
+			_mine_select.closed.connect(_on_mine_select_closed)
 
 
 ## Bind the modal Settings overlay (AC-5.8.3) to the shared SettingsState and listen for changes.
@@ -362,21 +387,32 @@ func _wire_overlay() -> void:
 	if _overlay == null:
 		return
 	_overlay.configure(_tables, _settings)
+	if _save != null:
+		_overlay.set_save_persistence_warning(_save.persistence_warning())
 	if not _overlay.settings_changed.is_connected(_on_settings_changed):
 		_overlay.settings_changed.connect(_on_settings_changed)
 	if not _overlay.keybind_rebound.is_connected(_on_keybind_rebound):
 		_overlay.keybind_rebound.connect(_on_keybind_rebound)
+	if not _overlay.save_export_requested.is_connected(_on_save_export_requested):
+		_overlay.save_export_requested.connect(_on_save_export_requested)
+	if not _overlay.save_import_requested.is_connected(_on_save_import_requested):
+		_overlay.save_import_requested.connect(_on_save_import_requested)
 
 
-## Attach the toggleable debug overlay (UNIT INFRA), bound to the F3 `toggle_debug` action. Built in
-## code (no authored .tscn) and added as a child so it lives + draws over the level. Idempotent — only
-## ever creates one (a re-boot reuses the existing instance). Read-only: it never mutates game state.
+## Attach the toggleable debug overlay in editor/debug exports only. It is intentionally absent from
+## release exports so production builds do not ship a discoverable diagnostics HUD.
 func _wire_debug_overlay() -> void:
+	if not _debug_overlay_enabled():
+		return
 	if _debug_overlay == null:
 		_debug_overlay = DEBUG_OVERLAY_SCRIPT.new()
 		_debug_overlay.name = "DebugOverlay"
 		add_child(_debug_overlay)
 	_debug_overlay.bind_mine(self)
+
+
+static func _debug_overlay_enabled() -> bool:
+	return OS.has_feature("editor") or OS.has_feature("debug")
 
 func _wire_world_guides() -> void:
 	if _shaft_supports != null:
@@ -421,6 +457,8 @@ func _on_end_dig_pressed() -> void:
 	else:
 		# No relic yet: end the dig without prestige (soft abort).
 		_run_state.end_dig()
+		Audio.play_run_end_jingle()
+		Audio.play_music("music_menu")
 		if _dig_end_panel != null:
 			_dig_end_panel.show_dig_end(0, _run_state.total_prestige,
 				_run_state.prestige.blast_intensity_mult(), _motion_intensity())
@@ -527,6 +565,23 @@ func _on_settings_changed() -> void:
 	_save_progress()
 
 
+func _on_save_export_requested() -> void:
+	if _save == null or _overlay == null:
+		return
+	_save_progress()
+	_overlay.set_save_export_text(_save.export_save_text())
+
+
+func _on_save_import_requested(text: String) -> void:
+	var ok := false
+	if _save != null:
+		ok = _save.import_save_text(text)
+	if ok:
+		_restore_durable_state_from_save()
+	if _overlay != null:
+		_overlay.set_save_import_result(ok)
+
+
 ## A keybind capture committed a new key for `action` (the overlay already wrote the SettingsState
 ## and fires settings_changed too). Mirror just that one action into the live InputMap right away so
 ## the rebind takes effect mid-dig without waiting for the full _apply_settings pass.
@@ -547,6 +602,27 @@ func _apply_settings() -> void:
 	if _hud != null:
 		_hud.set_text_scale(_settings.text_scale)
 		_hud.set_elevator_side(_settings.elevator_side)
+		_hud.set_button_motion(_settings.motion_intensity)
+	if _tray != null:
+		_tray.set_text_scale(_settings.text_scale)
+	if _shop_modal != null:
+		_shop_modal.set_text_scale(_settings.text_scale)
+	if _mine_select != null:
+		_mine_select.set_text_scale(_settings.text_scale)
+	if _overlay != null:
+		_overlay.set_text_scale(_settings.text_scale)
+
+
+func _restore_durable_state_from_save() -> void:
+	if _save == null or _run_state == null:
+		return
+	var loaded: Dictionary = _save.load_state()
+	_run_state.prestige.from_state(loaded.get("prestige", {}))
+	var default_binds: Dictionary = _input_map_defaults()
+	_settings = SettingsState.from_state(loaded.get("settings", {}), _tables, default_binds)
+	_apply_settings()
+	_wire_overlay()
+	_refresh_all_ui()
 
 
 ## Read the current default keycode for each rebindable action from the live InputMap (the project
@@ -605,6 +681,7 @@ func _build_grid_for(mine_id: String) -> void:
 	if _block_layer != null:
 		_block_layer.modulate = Registry.mine_tile_tint(_tables, mine_id)
 	_active_mine_id = mine_id
+	_refresh_relic_glow()
 
 
 func _start_dig() -> void:
@@ -641,8 +718,10 @@ func _start_dig() -> void:
 	if _aim != null:
 		_aim.reset_angle()
 		_aim.set_enabled(true)
+	_scaled_hp_cache.clear()
 	_grid.update_window(0, CHUNK_WINDOW_HALF)
 	_render_all_loaded_chunks()
+	Audio.play_music("music_mining")
 	if _dig_end_panel != null:
 		_dig_end_panel.hide_panel()
 	if _hud != null:
@@ -656,6 +735,8 @@ func _start_dig() -> void:
 func _on_relic_collected(cell: Vector2i) -> void:
 	_run_state.relic_found()
 	Audio.play_relic_found()
+	Audio.play_music("music_relic", 0.12)
+	_hide_relic_glow()
 	_spawn_relic_pulse(cell)
 	# A longer hit-stop on the relic break — the dig's climax lands with a deeper freeze.
 	# Fire-and-forget (self-restores time_scale); gated on motion + paused inside _hit_stop.
@@ -689,6 +770,7 @@ func _accept_prestige() -> void:
 	var motion: float = _motion_intensity()
 	if _last_banked > 0:
 		Audio.play_prestige_banked()
+		Audio.play("prestige_bank")
 		# Prestige-banked beat (v0.5 arcade pass): a brighter wash than the relic-found one. Same
 		# a11y-capped + motion-gated flash. Only fires when a point was actually banked.
 		if _hud != null:
@@ -699,6 +781,8 @@ func _accept_prestige() -> void:
 	if _hud != null:
 		_hud.set_end_dig_visible(false)
 	if _dig_end_panel != null:
+		Audio.play_run_end_jingle()
+		Audio.play_music("music_menu")
 		_dig_end_panel.show_dig_end(
 			_last_banked, _run_state.total_prestige, _run_state.prestige.blast_intensity_mult(), motion
 		)
@@ -739,13 +823,13 @@ func _update_preview() -> void:
 	# A throw is committing — let _begin_aim_fade_out animate the line away; don't snap it back.
 	if _aim_fading:
 		return
-	if _run_state.dig_ended or _active_charge != null:
-		_clear_preview()
-		return
-	# Phase D: HIDE the aim arc + reticle while the platform/elevator or shaft-supports are MOVING
-	# (descending/extending) — the launch point is in motion, so a drawn arc would be a stale lie.
-	# Redrawn when they settle (_on_platform_descended / _on_support_reached re-call _update_preview).
-	if _aim_is_moving():
+	# Single pure visibility gate (AimLine.preview_visible): the arc is drawn only when a real aim is
+	# in play. Phase D — the launch_moving term HIDES the arc + reticle while the platform/elevator or
+	# shaft-supports are MOVING (descending/extending), since the launch point is in motion and a drawn
+	# arc would be a stale lie. It is redrawn with a freshly recomputed arc when they settle (the
+	# _process Phase-D-settle edge re-calls _update_preview).
+	if not AimLine.preview_visible(
+			_run_state.dig_ended, _active_charge != null, _aim_fading, _aim_is_moving()):
 		_clear_preview()
 		return
 	var params := ThrowParams.from_explosive(_tables, _run_state.selected_id)
@@ -758,9 +842,9 @@ func _update_preview() -> void:
 	# /data feel tunables onto the AimLine (it paints the dashes itself in _draw() — no shader/UV
 	# fragility; see reports/aim-line-method.md). The dash PERIOD is in along-line pixels, so it is
 	# stable as the arc's pixel length changes each frame.
-	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
-	_preview_line.dash_px = Registry.feel_f(_tables, "aim_dash_px", 18.0)
-	_preview_line.gap_px = Registry.feel_f(_tables, "aim_gap_px", 14.0)
+	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 2.5)
+	_preview_line.dash_px = Registry.feel_f(_tables, "aim_dash_px", 8.0)
+	_preview_line.gap_px = Registry.feel_f(_tables, "aim_gap_px", 7.0)
 	_preview_line.line_color = Color(1, 1, 0.6, 0.85)  # the old Gradient_aim head color
 	_preview_line.alpha_mult = 1.0
 	_preview_line.set_points(path)
@@ -809,27 +893,43 @@ func _aim_march_speed() -> float:
 ## True WHILE a throw's fade-out tween is animating the line away — so _update_preview won't
 ## re-snap the freshly-thrown line back to full while it fades.
 var _aim_fading: bool = false
-## Accumulated time for the marching-dash texture scroll + reticle pulse (advanced in _process,
-## ONLY while dragging). _process does not run while the tree is paused (the Settings overlay
-## pauses it), so the dash naturally freezes during a pause; motion-intensity 0 also freezes it.
+## Accumulated time for the reticle pulse (advanced in _process while the preview is shown). _process
+## does not run while the tree is paused (the Settings overlay pauses it), so the pulse naturally
+## freezes during a pause; motion-intensity 0 also freezes it.
 var _aim_dash_t: float = 0.0
+## Current eased march-speed multiplier (1.0 idle → feel.aim_march_aim_mult while actively turning the
+## aim with ←/→). Eased toward its target each frame by AimLine.ease_march_mult so the speed-up ramps
+## in/out instead of snapping. Resets to 1.0 whenever the preview isn't shown.
+var _aim_march_mult: float = 1.0
 
 
-## Per-frame cosmetic animation for the aim line + reticle, gated on `is_dragging` (so it costs
-## nothing when not aiming) and on the motion-intensity accessibility setting (motion 0 → a still
-## line, no march/pulse — the reduced-motion contract). The MARCHING DASH is the alive feedback: the
-## AimLine paints the dashes in _draw(); we advance its march phase by delta * the gated speed (the
-## gate zeroes the speed for reduced-motion / paused, so the dashes hold still but stay visible — no
-## shader TIME). _process is suspended while the tree is paused (the Settings overlay), so nothing
-## here runs during a modal — and the gate also zeroes the march. Called from _process.
+## Per-frame cosmetic animation for the aim line + reticle. The MARCHING DASH now advances CONTINUOUSLY
+## while the preview is on screen (not only while dragging) — gated only on the reduced-motion /
+## paused contract via _aim_march_speed() (which zeroes the speed so the dashes hold still but stay
+## visible — no shader TIME). It SPEEDS UP while the player is actively turning the aim (holding ←/→):
+## the effective march speed is base × an eased multiplier (1.0 → feel.aim_march_aim_mult), easing
+## back to base on release. _process is suspended while the tree is paused (the Settings overlay), so
+## nothing here runs during a modal — and the gate also zeroes the march. Called from _process.
 func _animate_aim_line(delta: float) -> void:
-	if _aim == null or not _aim.is_dragging:
-		return
 	if _preview_line == null:
 		return
-	# March the dashes toward the tip. The gate returns 0 for reduced motion / paused, and
+	# No arc on screen → nothing to crawl; reset the boost so the next aim starts at base speed.
+	if not _preview_line.has_points():
+		_aim_march_mult = 1.0
+		return
+	# Speed-up while actively aiming (←/→ held). Drag-aim doesn't trigger the boost (it's a discrete
+	# pointer angle, not a continuous turn); the keyboard hold is the "actively turning" signal.
+	var aiming: bool = _keyboard_aim_dir() != 0
+	_aim_march_mult = AimLine.ease_march_mult(
+		_aim_march_mult,
+		aiming,
+		Registry.feel_f(_tables, "aim_march_aim_mult", 2.6),
+		Registry.feel_f(_tables, "aim_march_ease_rate", 8.0),
+		delta,
+	)
+	# March the dashes toward the tip. _aim_march_speed() returns 0 for reduced motion / paused, and
 	# advance_march(0) holds the pattern still (still drawn, just not crawling).
-	_preview_line.advance_march(delta * _aim_march_speed())
+	_preview_line.advance_march(delta * _aim_march_speed() * _aim_march_mult)
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
 	if motion <= 0.0:
 		# Reduced motion: hold a steady reticle (the dash is already frozen by the march gate).
@@ -910,6 +1010,23 @@ func _input(event: InputEvent) -> void:
 			_run_state.select_next()
 			_refresh_after_state_change()
 		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("select_next") or event.is_action_pressed("select_prev"):
+		# Q/E (select_prev/select_next) step the hotbar selection by ±1 over the VISIBLE owned-only
+		# slots, wrapping. Edge-triggered (a tap = one step). ←/→ are aim-only (aim_left/aim_right,
+		# polled in _process) so no key does two things by press duration (AC-5.3.7: no timing-precision
+		# inputs). Tab (cycle_charge) and the 1..9 number keys also select. No-op while paused or after
+		# the dig ended. Routes through select_relative → select_charge (the shared path).
+		if not _tree_paused() and not _run_state.dig_ended:
+			select_relative(1 if event.is_action_pressed("select_next") else -1)
+		get_viewport().set_input_as_handled()
+	elif event is InputEventKey:
+		var key := event as InputEventKey
+		if key.pressed and not key.echo:
+			var index := _slot_hotkey_index(key)
+			if index >= 0:
+				if not _tree_paused() and _run_state != null and not _run_state.dig_ended:
+					select_tray_slot_index(index)
+				get_viewport().set_input_as_handled()
 
 
 ## Held-aim direction this frame from the keyboard: -1 (aim_left), +1 (aim_right), 0 (none/both).
@@ -1011,7 +1128,8 @@ func throw_at(angle: float) -> Charge:
 	# instantly" fix. Code-side floors apply when these keys are absent.
 	var min_airtime: float = float(Registry.balance(_tables, "charge_min_airtime_seconds", -1.0))
 	var min_travel: float = float(Registry.balance(_tables, "charge_min_travel_px", -1.0))
-	charge.setup(params, _muzzle_position(), _bps, min_airtime, min_travel)
+	var sticky_delay: float = float(Registry.balance(_tables, "sticky_min_delay_seconds", -1.0))
+	charge.setup(params, _muzzle_position(), _bps, min_airtime, min_travel, sticky_delay)
 	charge.detonated.connect(_on_charge_detonated)
 	add_child(charge)
 	# Comet trail for a readable flight path + throw satisfaction (global-coords streak, web-safe COLOR).
@@ -1031,6 +1149,9 @@ func throw_at(angle: float) -> Charge:
 	# Fade the aim line out (don't snap it) so the throw reads as a release, not a hard cut.
 	_begin_aim_fade_out()
 	_refresh_all_ui()
+	# A finite charge was just consumed (count changed) — push the tray so the hotbar count / a
+	# now-empty finite type updates. State-change path → tray pushed here, not in _refresh_all_ui.
+	_push_tray()
 	return charge
 
 
@@ -1099,7 +1220,7 @@ func _finish_aim_fade_out() -> void:
 	_clear_preview()
 	if _preview_line != null:
 		_preview_line.alpha_mult = 1.0
-		_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 5.0)
+		_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 2.5)
 	if _aim_reticle != null:
 		_aim_reticle.modulate.a = 0.9
 
@@ -1112,12 +1233,61 @@ func select_charge(charge_id: String) -> bool:
 	return ok
 
 
+## Select visible tray slot `index` (0-based) from keyboard hotkeys 1-9. Owned checks still live in
+## RunState.select, so locked slots never bypass economy/tray rules.
+func select_tray_slot_index(index: int) -> bool:
+	if _tray == null or index < 0:
+		return false
+	var ids: Array = _tray.slot_ids()
+	if index >= ids.size():
+		Audio.play("button_disabled")
+		return false
+	var ok := select_charge(str(ids[index]))
+	if not ok:
+		Audio.play("button_disabled")
+	return ok
+
+
+## Step the selection ±1 within the VISIBLE hotbar slots (←/→ arrows + Q/E), wrapping at the ends.
+## Pure index math over the tray's owned-only `slot_ids()` (which IS the selectable set, free first),
+## so it stays truthful with the number badges. No-op headless if the tray is absent. Returns true if
+## a (possibly same, when only one slot) selection landed. The selection itself routes through
+## select_charge → RunState.select, the same path taps + number keys use.
+func select_relative(step: int) -> bool:
+	if _tray == null:
+		return false
+	var ids: Array = _tray.slot_ids()
+	if ids.is_empty():
+		return false
+	var cur: int = ids.find(_run_state.selected_id)
+	if cur < 0:
+		cur = 0
+	var n: int = ids.size()
+	var nxt: int = ((cur + step) % n + n) % n  # wrap both directions
+	return select_charge(str(ids[nxt]))
+
+
+## Map a digit key (1..9) to a 0-based visible-slot index, or -1 if not a digit. Pure (no tree/state),
+## so the number-key→index mapping is unit-testable without firing input events (which don't fire
+## headless). Slots past 9 have no key (their badge is blank) — only 1..9 map.
+static func slot_index_for_keycode(keycode: int) -> int:
+	if keycode >= KEY_1 and keycode <= KEY_9:
+		return keycode - KEY_1
+	return -1
+
+
+func _slot_hotkey_index(key: InputEventKey) -> int:
+	var kc: int = key.physical_keycode if key.physical_keycode != 0 else key.keycode
+	return slot_index_for_keycode(kc)
+
+
 func _on_tray_slot_selected(charge_id: String) -> void:
 	select_charge(charge_id)
 
 
 func _on_buy_pack_button() -> void:
 	if _shop_modal != null:
+		Audio.play_music("music_shop")
 		_shop_modal.open(_motion_intensity())
 
 
@@ -1127,6 +1297,9 @@ func buy_pack(pack_id: String) -> bool:
 	if ok:
 		Audio.play_pack_open()  # AC-5.13.1
 		_refresh_all_ui()
+		# New charges granted (slot SET changed) — push the tray so the new types appear. State-change
+		# path → tray pushed here, not in _refresh_all_ui.
+		_push_tray()
 	return ok
 
 
@@ -1135,7 +1308,12 @@ func buy_pack(pack_id: String) -> bool:
 ## is disabled), leave the modal open so the player can pick something else.
 func _on_shop_buy_pressed(pack_id: String) -> void:
 	if buy_pack(pack_id) and _shop_modal != null:
-		_shop_modal.close()
+		_shop_modal.play_pack_reveal(pack_id, _run_state.last_pack_result(), _motion_intensity())
+
+
+func _on_shop_closed() -> void:
+	if _run_state != null and not _run_state.dig_ended:
+		Audio.play_music("music_mining")
 
 
 ## A per-dig MONEY upgrade (Shaft Engineering) was bought from the shop. Debit + record
@@ -1147,7 +1325,7 @@ func buy_money_upgrade(upgrade_id: String) -> bool:
 		return false
 	_recompute_shaft()
 	_check_descent()  # the narrower requirement may already clear a layer (grid is loaded mid-dig)
-	Audio.play_ore_credited()  # reuse the purchase/credit cue
+	Audio.play_upgrade_purchase()
 	_refresh_all_ui()
 	if _shop_modal != null:
 		_shop_modal.refresh()
@@ -1163,7 +1341,13 @@ func _on_shop_buy_upgrade(upgrade_id: String) -> void:
 ## Open the mine-select screen (HUD button). Pauses the tree like the other modals.
 func _on_mine_select_button() -> void:
 	if _mine_select != null:
+		Audio.play_music("music_menu")
 		_mine_select.open(_motion_intensity())
+
+
+func _on_mine_select_closed() -> void:
+	if _run_state != null and not _run_state.dig_ended:
+		Audio.play_music("music_mining")
 
 
 ## Unlock access to `mine_id` by paying its one-time access cost from this dig's money. The
@@ -1175,7 +1359,7 @@ func unlock_mine(mine_id: String) -> bool:
 	if not _economy.debit(cost):
 		return false
 	_unlocked_mines[mine_id] = true
-	Audio.play_ore_credited()
+	Audio.play_upgrade_purchase()
 	_refresh_all_ui()
 	if _mine_select != null:
 		_mine_select.refresh()
@@ -1395,7 +1579,7 @@ func _on_support_reached(row: int) -> void:
 	_run_state.depth = row
 	var center_chunk: int = _grid.cell_to_chunk(row)
 	_grid.update_window(center_chunk, CHUNK_WINDOW_HALF)
-	_render_all_loaded_chunks()
+	_render_chunk_diff()
 	if _hud != null:
 		_hud.set_depth(row)
 		_hud.bump_depth()
@@ -1433,6 +1617,18 @@ func _on_panel_next_dig() -> void:
 # RENDERING (the TileMapLayers as a VIEW of the BlockGrid HP store)
 # ══════════════════════════════════════════════════════════════════════════════
 
+## Cache for scaled_block_hp per (block_id, row) — avoids ~3 balance lookups per cell
+## per re-render (PERF-02). Cleared at dig start; entries are stable within a dig.
+var _scaled_hp_cache: Dictionary = {}
+
+func _cached_scaled_block_hp(block_id: String, row: int) -> int:
+	var key: String = "%s_%d" % [block_id, row]
+	if _scaled_hp_cache.has(key):
+		return int(_scaled_hp_cache[key])
+	var v: int = Registry.scaled_block_hp(_tables, block_id, row, _grid.mine_hardness_mult)
+	_scaled_hp_cache[key] = v
+	return v
+
 func _render_all_loaded_chunks() -> void:
 	if _block_layer == null:
 		return
@@ -1447,6 +1643,29 @@ func _render_all_loaded_chunks() -> void:
 				continue
 			for lx in range(_mine_w):
 				_render_cell(lx, y)
+
+## Incremental render: erase unloaded chunks, render only newly-loaded ones (PERF-02).
+## Avoids the full clear + re-render of all ~44,800 resident cells on every descent.
+func _render_chunk_diff() -> void:
+	if _block_layer == null:
+		return
+	for chunk_y in _grid.just_unloaded_chunks():
+		var base_y_u: int = chunk_y * _chunk_h
+		for ly in range(_chunk_h):
+			var y_u: int = base_y_u + ly
+			for lx in range(_mine_w):
+				var cell_u := Vector2i(lx, y_u)
+				_block_layer.erase_cell(cell_u)
+				if _crack_layer != null:
+					_crack_layer.erase_cell(cell_u)
+	for chunk_y in _grid.newly_loaded_chunks():
+		var base_y_n: int = chunk_y * _chunk_h
+		for ly in range(_chunk_h):
+			var y_n: int = base_y_n + ly
+			if _mine_h > 0 and y_n >= _mine_h:
+				continue
+			for lx in range(_mine_w):
+				_render_cell(lx, y_n)
 
 
 func _render_cell(cell_x: int, cell_y: int) -> void:
@@ -1472,9 +1691,7 @@ func _render_cell(cell_x: int, cell_y: int) -> void:
 
 	if _crack_layer == null:
 		return
-	var max_hp: int = Registry.scaled_block_hp(
-		_tables, block_id, cell_y, _grid.mine_hardness_mult
-	)
+	var max_hp: int = _cached_scaled_block_hp(block_id, cell_y)
 	var stages: int = Registry.crack_stages(_tables)
 	var stage: int = Blast.crack_stage(hp, max_hp, stages)
 	# Visible crack stages are 1..stages-1 (stage 0 = full, stages = broken sentinel).
@@ -1528,6 +1745,11 @@ var _in_hitstop: bool = false
 ##  - the restore timer is created with ignore_time_scale=true (4th arg) so it counts REAL
 ##    seconds — otherwise it would wait seconds/scale real seconds (≈1s) and feel frozen.
 ##  - time_scale is ALWAYS restored to 1.0 in every exit path; a smoke test asserts ==1.0.
+##
+## FX-timer policy under hit-stop: world fx (debris, explosion, relic pulse, value popups) use
+## SCALED timers (no ignore_time_scale) so they freeze WITH the frame — the freeze-frame sells
+## weight because the whole world stops. UI feedback fx (muzzle flash, coin fly) use REAL timers
+## (ignore_time_scale=true) so they keep playing during the freeze — the player still sees feedback.
 func _hit_stop(seconds: float) -> void:
 	var motion: float = _settings.motion_intensity if _settings != null else 1.0
 	if motion <= EXPLOSION_MOTION_FLOOR:
@@ -1675,6 +1897,77 @@ func _spawn_relic_pulse(cell: Vector2i) -> void:
 	get_tree().create_timer(ttl).timeout.connect(fx.queue_free)
 
 
+func _refresh_relic_glow() -> void:
+	if _grid == null:
+		return
+	_ensure_relic_glow()
+	if _relic_glow == null:
+		return
+	var anchor: Vector2i = _grid.relic_cell
+	if anchor.y < 0 or _grid.relic_collected_already:
+		_relic_glow.visible = false
+		return
+	_relic_glow.position = Vector2(
+		float(anchor.x * _bps) + float(_bps),
+		float(anchor.y * _bps) + float(_bps)
+	)
+	# Cover the 2x2 relic plus one block of falloff on every side.
+	var desired_px: float = float(_bps) * 4.0
+	var tex_size: Vector2 = _relic_glow.texture.get_size() if _relic_glow.texture != null else Vector2(128, 128)
+	_relic_glow.scale = Vector2.ONE * (desired_px / maxf(1.0, tex_size.x))
+	_relic_glow.visible = true
+
+
+func _ensure_relic_glow() -> void:
+	if _relic_glow != null and is_instance_valid(_relic_glow):
+		return
+	_relic_glow = Sprite2D.new()
+	_relic_glow.name = "RelicGlow"
+	_relic_glow.centered = true
+	_relic_glow.z_index = 1
+	_relic_glow.texture = _build_relic_glow_texture()
+	var mat := CanvasItemMaterial.new()
+	mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_relic_glow.material = mat
+	var color: Color = Registry.relic_glow_color(_tables)
+	color.a = 0.55
+	_relic_glow.modulate = color
+	var parent: Node = get_node_or_null("BlockGrid")
+	if parent == null:
+		parent = self
+	parent.add_child(_relic_glow)
+
+
+func _build_relic_glow_texture() -> ImageTexture:
+	var size: int = 128
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var center := Vector2(float(size) * 0.5, float(size) * 0.5)
+	var radius: float = float(size) * 0.5
+	for y in range(size):
+		for x in range(size):
+			var p := Vector2(float(x) + 0.5, float(y) + 0.5)
+			var d: float = clampf(p.distance_to(center) / radius, 0.0, 1.0)
+			var alpha: float = pow(1.0 - d, 2.2)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, alpha))
+	return ImageTexture.create_from_image(img)
+
+
+func _hide_relic_glow() -> void:
+	if _relic_glow != null and is_instance_valid(_relic_glow):
+		_relic_glow.visible = false
+
+
+func _update_relic_glow(delta: float) -> void:
+	if _relic_glow == null or not is_instance_valid(_relic_glow) or not _relic_glow.visible:
+		return
+	_relic_glow_time += delta
+	var pulse_seconds: float = maxf(0.1, Registry.relic_glow_pulse_seconds(_tables))
+	var wave: float = 0.5 + 0.5 * sin((TAU * _relic_glow_time) / pulse_seconds)
+	var color: Color = Registry.relic_glow_color(_tables)
+	color.a = lerpf(0.35, 0.72, wave)
+	_relic_glow.modulate = color
+
+
 static func explosion_particle_count(base_amount: int, motion: float) -> int:
 	var m: float = clampf(motion, 0.0, 1.0)
 	var factor: float = lerpf(EXPLOSION_MOTION_FLOOR, 1.0, m)
@@ -1737,7 +2030,7 @@ func _update_cooldown_visual() -> void:
 			# vs. offset fight (the old "dead timer" bug), so it visibly drains every frame.
 			var bw: float = _throw_button.size.x
 			var bh: float = _throw_button.size.y
-			_cooldown_fill.set_anchors_preset(Control.PRESET_TOP_WIDE)
+			_cooldown_fill.set_anchors_preset(Control.PRESET_TOP_LEFT)
 			_cooldown_fill.position = Vector2.ZERO
 			_cooldown_fill.size = Vector2(bw, bh * remaining_frac)
 	if _cooldown_label != null:
@@ -1763,6 +2056,7 @@ func _update_cooldown_visual() -> void:
 ## `_refresh_all_ui()` then `_update_preview()` back-to-back at the call site.
 func _refresh_after_state_change() -> void:
 	_refresh_all_ui()
+	_push_tray()
 	_update_preview()
 
 
@@ -1780,7 +2074,12 @@ func _refresh_all_ui() -> void:
 		_hud.set_depth(depth)
 		_hud.set_relic_progress(_run_state.relic_collected)
 		_hud.set_depth_odds(Registry.band_odds(_tables, depth))
-	_rebuild_tray()
+	# NOTE: the tray hotbar is INTENTIONALLY NOT pushed here. Geometry of the selector bar is a
+	# function of the OWNED SLOT SET only, so a generic refresh — especially a per-frame platform
+	# move (_on_elevator_*, _on_platform_descended) — must never touch it (requirement 4: the hotbar
+	# must not rebuild/jump on platform movement). Tray pushes live ONLY in the state-change paths via
+	# _push_tray() (select/cycle/throw/buy/dig-start/relic), wired through _refresh_after_state_change
+	# and the explicit buy/throw/prestige sites. See _push_tray for the signature rebuild-vs-pop gate.
 	if _throw_button != null:
 		var can_throw: bool = _throw_controls.can_throw() if _throw_controls != null else (_active_charge == null)
 		_throw_button.disabled = (_run_state.dig_ended or not can_throw)
@@ -1812,11 +2111,13 @@ func _refresh_all_ui() -> void:
 var _last_tray_signature: String = ""
 
 
-## Rebuild the tray view from the RunState tray (collapsing duplicate finite charges
-## into one slot with a count; the free charge is the first slot with ∞ — AC-5.8.1/2).
-## Selection-only changes are routed through TrayUi.set_selected (a non-destructive pop) so the row
-## never rebuilds on a tap; only a slot-SET change does a full rebuild.
-func _rebuild_tray() -> void:
+## Push the current tray state to the hotbar view (collapsing duplicate finite charges into one slot
+## with a count; the free charge is the first slot with ∞ — AC-5.8.1/2). Called ONLY from the
+## state-change paths (NOT from the generic _refresh_all_ui), so a platform move can never churn the
+## row (requirement 4). Internally decides rebuild-vs-pop via the SLOT-SET signature: a slot-set
+## change (pack buy / charge consumed / dig start) does a full rebuild; a selection-only change routes
+## through TrayUi.set_selected (a non-destructive in-place pop, itself idempotent on a re-select).
+func _push_tray() -> void:
 	if _tray == null:
 		return
 	var slots: Array = []
@@ -1829,7 +2130,7 @@ func _rebuild_tray() -> void:
 		seen.append(id)
 		slots.append({"id": id, "count": _run_state.count_of(id)})
 	var signature: String = _tray_signature(slots)
-	if signature == _last_tray_signature and _tray.get_child_count() == slots.size():
+	if signature == _last_tray_signature and _tray.get_child_count() > 0:
 		# Slot set unchanged → selection-only: pop the tapped slot in place (no rebuild/flicker).
 		_tray.set_selected(_run_state.selected_id, _motion_intensity())
 		return
@@ -1870,6 +2171,7 @@ var _last_light_uv: Vector2 = Vector2(NAN, NAN)
 
 func _process(delta: float) -> void:
 	_update_light_mask()
+	_update_relic_glow(delta)
 	# Held keyboard aim (D1): glide the launch angle while aim_left/aim_right is held. Done in
 	# _process via Input.is_action_pressed (the "held → poll" half), so the angle moves smoothly
 	# every frame, not once per key event. Gated (paused/dig-ended/in-flight) inside the helper.

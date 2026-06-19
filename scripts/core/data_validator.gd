@@ -16,8 +16,14 @@ const DETONATION_MODES := ["fuse_seconds", "on_first_impact", "on_rest"]
 ## non-color block identity — every two block types must read apart by brightness, not just hue.
 const MIN_BLOCK_LUMINANCE_DELTA := 0.06
 
+## Set at the top of validate() so the static _check_depth_curve (whose signature is shared
+## with the existing tests) can see the ore-overlay layer to reject overlay-owned ids from the
+## base filler curve. Per-call (validate is not re-entrant in practice).
+static var _root_ore_overlays: Variant = null
+
 static func validate(tables: Dictionary) -> Array:
 	var errors: Array = []
+	_root_ore_overlays = tables.get("ore_overlays")
 	var balance: Dictionary = _dict(tables, "balance", errors)
 	var blocks: Dictionary = _dict(tables, "block_types", errors)
 	var explosives: Dictionary = _dict(tables, "explosives", errors)
@@ -29,6 +35,7 @@ static func validate(tables: Dictionary) -> Array:
 
 	_check_balance(balance, errors)
 	_check_ui(balance, errors)
+	_check_ui_overhaul(balance, errors)
 	_check_settings(balance, errors)
 	_check_vfx(balance, errors)
 	_check_feel(balance, errors)
@@ -38,7 +45,9 @@ static func validate(tables: Dictionary) -> Array:
 	_check_palette(tables.get("palette"), blocks, errors)
 	_check_art_sources(art_sources, blocks, errors)
 	_check_depth_curve(curve, blocks, errors)
-	_check_depth_reward_monotone(curve, blocks, errors)
+	_check_ore_overlays(tables.get("ore_overlays"), blocks, errors)
+	_check_ore_value_ladder(tables.get("ore_overlays"), blocks, errors)
+	_check_depth_reward_monotone(curve, tables.get("ore_overlays"), blocks, errors)
 	_check_explosives(explosives, balance, errors)
 	_check_packs(packs, explosives, errors)
 	_check_pack_affordability(packs, balance, errors)
@@ -244,6 +253,58 @@ static func _check_ui(b: Dictionary, errors: Array) -> void:
 		if fa < 0.0 or fa > 1.0:
 			errors.append("balance: 'ui_flash_alpha' %s must be in [0,1] (v0.5 UI animation, a11y-capped)" % str(fa))
 
+## UI-overhaul tunables (selector + crate reveal). All timings/caps are authored in /data so the
+## 8-bit UI pass remains balance/schema driven (AC-5.5.4, AC-5.8.5, AC-5.10.1).
+static func _check_ui_overhaul(b: Dictionary, errors: Array) -> void:
+	if not b.has("ui_selector"):
+		errors.append("balance: missing 'ui_selector' block (charge selector UI)")
+	else:
+		var sel: Variant = b.get("ui_selector")
+		if not (sel is Dictionary):
+			errors.append("balance.ui_selector: must be a JSON object")
+		else:
+			var sd: Dictionary = sel
+			for k in ["slot_width_px", "slot_height_px", "icon_px"]:
+				if not sd.has(k):
+					errors.append("balance.ui_selector: missing '%s'" % k)
+				elif float(sd.get(k, 0.0)) < 44.0:
+					errors.append("balance.ui_selector: '%s' %s must be >= 44px (AC-5.8.5)" % [k, str(sd.get(k))])
+			# The selector occupies its OWN bar (a row distinct from the THROW/SHOP/MINES action row,
+			# AC-5.8.1/5.8.5). The bar must be tall enough to hold a full slot so the hotbar never
+			# clips a slot below the touch target — so the bar height is >= the slot height.
+			if not sd.has("selector_bar_height_px"):
+				errors.append("balance.ui_selector: missing 'selector_bar_height_px'")
+			elif float(sd.get("selector_bar_height_px", 0.0)) < float(sd.get("slot_height_px", 0.0)):
+				errors.append("balance.ui_selector: 'selector_bar_height_px' %s must be >= 'slot_height_px' %s (AC-5.8.5)" % [str(sd.get("selector_bar_height_px")), str(sd.get("slot_height_px"))])
+			for k in ["selected_bob_px", "selected_bob_seconds", "long_press_seconds", "popover_seconds"]:
+				if not sd.has(k):
+					errors.append("balance.ui_selector: missing '%s'" % k)
+				elif float(sd.get(k, 0.0)) <= 0.0:
+					errors.append("balance.ui_selector: '%s' %s must be > 0" % [k, str(sd.get(k))])
+	if not b.has("ui_crate"):
+		errors.append("balance: missing 'ui_crate' block (pack reveal UI)")
+	else:
+		var crate: Variant = b.get("ui_crate")
+		if not (crate is Dictionary):
+			errors.append("balance.ui_crate: must be a JSON object")
+		else:
+			var cd: Dictionary = crate
+			for k in ["drop_seconds", "open_seconds", "reveal_seconds", "settle_seconds", "hold_seconds", "reduced_hold_seconds", "card_stagger_seconds", "lid_lift_px"]:
+				if not cd.has(k):
+					errors.append("balance.ui_crate: missing '%s'" % k)
+				elif float(cd.get(k, 0.0)) <= 0.0:
+					errors.append("balance.ui_crate: '%s' %s must be > 0" % [k, str(cd.get(k))])
+			if not cd.has("rare_hitstop_seconds"):
+				errors.append("balance.ui_crate: missing 'rare_hitstop_seconds'")
+			else:
+				var hs: float = float(cd.get("rare_hitstop_seconds", -1.0))
+				if hs < 0.0 or hs > 0.12:
+					errors.append("balance.ui_crate: 'rare_hitstop_seconds' %s must be in [0,0.12]" % str(hs))
+			if not cd.has("particle_count_rare"):
+				errors.append("balance.ui_crate: missing 'particle_count_rare'")
+			elif int(cd.get("particle_count_rare", 0)) < 0:
+				errors.append("balance.ui_crate: 'particle_count_rare' must be >= 0")
+
 ## AC-5.10.1 (accessibility settings). The Settings UI seeds from data-driven defaults +
 ## ranges — volumes/motion are normalized [0,1] sliders; the UI text scale carries an
 ## explicit [min,max] band the slider clamps to. All required (balance is data) and each
@@ -398,6 +459,18 @@ static func _check_feel(b: Dictionary, errors: Array) -> void:
 		var period: float = float(fd.get("aim_dash_px", 0.0)) + float(fd.get("aim_gap_px", 0.0))
 		if period <= 0.0:
 			errors.append("balance.feel: 'aim_dash_px' + 'aim_gap_px' (dash period) %s must be > 0" % str(period))
+	# aim_march_aim_mult: the dash crawls FASTER while the player is actively turning the aim
+	# (holding ←/→). It MUST be >= 1 (1 = no speed-up; < 1 would perversely slow the march while
+	# aiming). aim_march_ease_rate is how fast (per second) the multiplier eases in/out and must be
+	# strictly > 0 (a 0/negative rate has no ease budget and would snap the speed-up on/off).
+	if not fd.has("aim_march_aim_mult"):
+		errors.append("balance.feel: missing 'aim_march_aim_mult'")
+	elif float(fd.get("aim_march_aim_mult", 0.0)) < 1.0:
+		errors.append("balance.feel: 'aim_march_aim_mult' %s must be >= 1" % str(fd.get("aim_march_aim_mult")))
+	if not fd.has("aim_march_ease_rate"):
+		errors.append("balance.feel: missing 'aim_march_ease_rate'")
+	elif float(fd.get("aim_march_ease_rate", 0.0)) <= 0.0:
+		errors.append("balance.feel: 'aim_march_ease_rate' %s must be > 0" % str(fd.get("aim_march_ease_rate")))
 	# Muzzle flash burst: a one-shot needs at least one particle to read.
 	if not fd.has("muzzle_flash_particles"):
 		errors.append("balance.feel: missing 'muzzle_flash_particles'")
@@ -451,6 +524,14 @@ const AUDIO_EVENTS := [
 	"detonate", "crack", "break", "ore_credited",
 	"pack_open", "relic_found", "prestige_banked",
 	"descend", "throw",
+	"crate_drop", "crate_creak", "crate_smash", "rare_reveal_sting",
+	"charge_select", "button_hover", "button_press", "button_disabled",
+	"modal_open", "modal_close", "insufficient_funds", "coin_fly",
+	"prestige_bank", "run_end_jingle", "upgrade_purchase",
+]
+
+const AUDIO_MUSIC_TRACKS := [
+	"music_menu", "music_mining", "music_deep", "music_relic", "music_shop",
 ]
 
 static func _check_audio(audio: Variant, errors: Array) -> void:
@@ -504,6 +585,43 @@ static func _check_audio(audio: Variant, errors: Array) -> void:
 			for layer in (layers as Array):
 				_check_audio_event_spec("audio.detonate.layers[%d]" % li, layer, errors)
 				li += 1
+	var music: Variant = ad.get("music")
+	if not (music is Dictionary):
+		errors.append("audio.json: missing 'music' object (placeholder chiptune loops)")
+	else:
+		var md: Dictionary = music
+		for track in AUDIO_MUSIC_TRACKS:
+			if not md.has(track):
+				errors.append("audio.music: missing '%s'" % track)
+				continue
+			_check_music_spec("audio.music.%s" % track, md.get(track), errors)
+
+static func _check_music_spec(label: String, spec: Variant, errors: Array) -> void:
+	if not (spec is Dictionary):
+		errors.append("%s: must be a JSON object" % label)
+		return
+	var sd: Dictionary = spec
+	if not sd.has("bpm"):
+		errors.append("%s: missing 'bpm'" % label)
+	elif float(sd.get("bpm", 0.0)) <= 0.0:
+		errors.append("%s: 'bpm' %s must be > 0" % [label, str(sd.get("bpm"))])
+	if not sd.has("step_beats"):
+		errors.append("%s: missing 'step_beats'" % label)
+	elif float(sd.get("step_beats", 0.0)) <= 0.0:
+		errors.append("%s: 'step_beats' %s must be > 0" % [label, str(sd.get("step_beats"))])
+	if not sd.has("volume"):
+		errors.append("%s: missing 'volume'" % label)
+	else:
+		var vol: float = float(sd.get("volume", -1.0))
+		if vol < 0.0 or vol > 1.0:
+			errors.append("%s: 'volume' %s must be in [0,1]" % [label, str(vol)])
+	var notes: Variant = sd.get("notes")
+	if not (notes is Array) or (notes as Array).is_empty():
+		errors.append("%s: missing non-empty 'notes' array" % label)
+	else:
+		for i in range((notes as Array).size()):
+			if float((notes as Array)[i]) < 0.0:
+				errors.append("%s.notes[%d]: note frequency must be >= 0 (0 = rest)" % [label, i])
 
 ## A single synthesised-tone spec: freq>0, dur in (0,2], noise in [0,1], sweep>=0, pitch_jitter in
 ## [0,0.5]. Shared by both the per-event specs and the detonate.layers voices.
@@ -781,12 +899,25 @@ static func _check_depth_curve(curve: Variant, blocks: Dictionary, errors: Array
 		errors.append("depth_bands: missing 'hud_sample_band_cells'")
 	elif int(c.get("hud_sample_band_cells", 0)) <= 0:
 		errors.append("depth_bands: 'hud_sample_band_cells' must be > 0")
-	_check_anchor_weights("surface_weights", c.get("surface_weights"), blocks, errors)
-	_check_anchor_weights("cap_weights", c.get("cap_weights"), blocks, errors)
+	# The base filler curve is "how hard"; the ore overlay is "how rich". Ores live ONLY in
+	# ore_overlays.json — an overlay-owned block id appearing in a base anchor would double-count
+	# it (filler weight + overlay stamp). Reject any base-table id that the overlay claims (D2).
+	var overlay_ids: Dictionary = {}
+	var ov: Variant = _root_ore_overlays
+	if ov is Dictionary:
+		var ores: Variant = (ov as Dictionary).get("ores")
+		if ores is Dictionary:
+			for oid in (ores as Dictionary).keys():
+				var o: Variant = (ores as Dictionary)[oid]
+				if o is Dictionary:
+					overlay_ids[str((o as Dictionary).get("block_id", oid))] = true
+	_check_anchor_weights("surface_weights", c.get("surface_weights"), blocks, overlay_ids, errors)
+	_check_anchor_weights("cap_weights", c.get("cap_weights"), blocks, overlay_ids, errors)
 
 ## One anchor weight table: a non-empty object whose keys are known diggable blocks, each
 ## with a weight > 0. (A block may be absent from one anchor — that means weight 0 there.)
-static func _check_anchor_weights(label: String, weights: Variant, blocks: Dictionary, errors: Array) -> void:
+## An overlay-owned id (in ore_overlays) must NOT appear here — that re-tangles the layers.
+static func _check_anchor_weights(label: String, weights: Variant, blocks: Dictionary, overlay_ids: Dictionary, errors: Array) -> void:
 	if not (weights is Dictionary) or (weights as Dictionary).is_empty():
 		errors.append("depth_bands.%s: must be a non-empty object" % label)
 		return
@@ -795,6 +926,8 @@ static func _check_anchor_weights(label: String, weights: Variant, blocks: Dicti
 			errors.append("depth_bands.%s: references unknown block '%s'" % [label, block_id])
 		elif not blocks.get(block_id, {}).get("diggable", false):
 			errors.append("depth_bands.%s: block '%s' is not diggable" % [label, block_id])
+		if overlay_ids.has(block_id):
+			errors.append("depth_bands.%s: ore '%s' must not appear in the base filler curve — it belongs to ore_overlays.json (the overlay layer); base curve is filler-only (continuous-gen D2)" % [label, block_id])
 		if float((weights as Dictionary)[block_id]) <= 0.0:
 			errors.append("depth_bands.%s: weight for '%s' must be > 0" % [label, block_id])
 
@@ -805,7 +938,112 @@ static func _check_anchor_weights(label: String, weights: Variant, blocks: Dicti
 ## samples, plus that a sample PAST the cap equals the cap sample (the boundedness guard). A /data
 ## edit that flattens or inverts the ramp — or makes cap_weights no richer than surface_weights —
 ## fails the build, not the player. This is the machine-checked AC-5.5.2 invariant over the curve.
-static func _check_depth_reward_monotone(curve: Variant, blocks: Dictionary, errors: Array) -> void:
+## NEW (continuous-gen v0.7): the per-ore noise-overlay layer (data/ore_overlays.json).
+## Enforces the join + range invariants the generator + reward proxy rely on (design §5.3):
+## priority_order is a permutation of the ores keys; each ore's block_id exists + is diggable
+## + has ore.value > 0; field_salt is a unique int; frequency > 0; depth_min >= 0;
+## 0 < threshold_deep <= threshold_shallow < 1 (deeper never rarer); priority == the ore's
+## index in priority_order (the deterministic walk order). Every rule is mutation-verified by
+## a targeted negative in test_data_integrity.
+static func _check_ore_overlays(overlays: Variant, blocks: Dictionary, errors: Array) -> void:
+	if overlays == null:
+		errors.append("missing table: ore_overlays.json (continuous-gen ore overlay layer)")
+		return
+	if not (overlays is Dictionary):
+		errors.append("ore_overlays.json must be a JSON object")
+		return
+	var ov: Dictionary = overlays
+	var order: Variant = ov.get("priority_order")
+	var ores: Variant = ov.get("ores")
+	if not (ores is Dictionary) or (ores as Dictionary).is_empty():
+		errors.append("ore_overlays: 'ores' must be a non-empty object")
+		return
+	var ores_d: Dictionary = ores
+	if not (order is Array):
+		errors.append("ore_overlays: 'priority_order' must be an array")
+		return
+	var order_a: Array = order
+	# priority_order must be a PERMUTATION of the ores keys (same set, same size, no dupes).
+	if order_a.size() != ores_d.size():
+		errors.append("ore_overlays: 'priority_order' length %d != number of ores %d (must be a permutation)" % [order_a.size(), ores_d.size()])
+	var seen_order: Dictionary = {}
+	for oid in order_a:
+		if seen_order.has(oid):
+			errors.append("ore_overlays: 'priority_order' has duplicate '%s'" % str(oid))
+		seen_order[str(oid)] = true
+		if not ores_d.has(str(oid)):
+			errors.append("ore_overlays: 'priority_order' lists '%s' which is not in 'ores'" % str(oid))
+	for oid in ores_d.keys():
+		if not seen_order.has(str(oid)):
+			errors.append("ore_overlays: ore '%s' is missing from 'priority_order'" % str(oid))
+	# Per-ore field + join checks; field_salt uniqueness; priority == index in priority_order.
+	var salts: Dictionary = {}
+	for oid in ores_d.keys():
+		var o: Variant = ores_d[oid]
+		if not (o is Dictionary):
+			errors.append("ore_overlays.ores[%s]: must be an object" % str(oid))
+			continue
+		var od: Dictionary = o
+		for k in ["block_id", "field_salt", "frequency", "depth_min", "threshold_shallow", "threshold_deep", "priority"]:
+			if not od.has(k):
+				errors.append("ore_overlays.ores[%s]: missing '%s'" % [str(oid), k])
+		var bid: String = str(od.get("block_id", ""))
+		if not blocks.has(bid):
+			errors.append("ore_overlays.ores[%s]: block_id '%s' is not a known block" % [str(oid), bid])
+		else:
+			var blk: Variant = blocks[bid]
+			if not (blk is Dictionary) or not bool((blk as Dictionary).get("diggable", false)):
+				errors.append("ore_overlays.ores[%s]: block_id '%s' must be diggable" % [str(oid), bid])
+			elif _ore_value(blk) <= 0:
+				errors.append("ore_overlays.ores[%s]: block_id '%s' must have ore.value > 0 (an overlay ore is a reward)" % [str(oid), bid])
+		var salt: int = int(od.get("field_salt", 0))
+		if salts.has(salt):
+			errors.append("ore_overlays.ores[%s]: field_salt %d is not unique (collides with '%s') — fields would correlate" % [str(oid), salt, str(salts[salt])])
+		salts[salt] = oid
+		if float(od.get("frequency", 0.0)) <= 0.0:
+			errors.append("ore_overlays.ores[%s]: frequency must be > 0 (it sets the cluster size)" % str(oid))
+		if int(od.get("depth_min", -1)) < 0:
+			errors.append("ore_overlays.ores[%s]: depth_min must be >= 0" % str(oid))
+		var thr_sh: float = float(od.get("threshold_shallow", -1.0))
+		var thr_dp: float = float(od.get("threshold_deep", -1.0))
+		if thr_dp <= 0.0 or thr_dp >= 1.0:
+			errors.append("ore_overlays.ores[%s]: threshold_deep %s must be in (0,1)" % [str(oid), str(thr_dp)])
+		if thr_sh <= 0.0 or thr_sh >= 1.0:
+			errors.append("ore_overlays.ores[%s]: threshold_shallow %s must be in (0,1)" % [str(oid), str(thr_sh)])
+		if thr_dp > thr_sh:
+			errors.append("ore_overlays.ores[%s]: threshold_deep %s must be <= threshold_shallow %s (deeper is never rarer)" % [str(oid), str(thr_dp), str(thr_sh)])
+		# priority must equal the ore's index in priority_order (so the field + the walk agree).
+		var idx: int = order_a.find(str(oid))
+		if idx >= 0 and int(od.get("priority", -1)) != idx:
+			errors.append("ore_overlays.ores[%s]: priority %d must equal its index %d in priority_order" % [str(oid), int(od.get("priority", -1)), idx])
+
+## NEW (continuous-gen v0.7): the ore VALUE LADDER. Walking the ores rarest→common (the
+## priority_order, index 0 = rarest), each ore's ore.value must be STRICTLY DECREASING
+## (diamond > gem > gold > silver > copper > coal). Catches a value inversion (the live
+## gold<silver bug) as a build failure (design §5.3, D11).
+static func _check_ore_value_ladder(overlays: Variant, blocks: Dictionary, errors: Array) -> void:
+	if not (overlays is Dictionary):
+		return  # shape errors already reported by _check_ore_overlays
+	var order: Variant = (overlays as Dictionary).get("priority_order")
+	var ores: Variant = (overlays as Dictionary).get("ores")
+	if not (order is Array) or not (ores is Dictionary):
+		return
+	var prev_value: int = -1
+	var prev_id: String = ""
+	for oid in (order as Array):
+		var o: Variant = (ores as Dictionary).get(str(oid))
+		if not (o is Dictionary):
+			continue
+		var bid: String = str((o as Dictionary).get("block_id", ""))
+		if not blocks.has(bid) or not (blocks[bid] is Dictionary):
+			continue
+		var v: int = _ore_value(blocks[bid])
+		if prev_value >= 0 and v >= prev_value:
+			errors.append("ore_overlays: ore value ladder must strictly DECREASE rarest→common — '%s' value %d >= rarer '%s' value %d (a value inversion; rarer ore must be worth more)" % [str(oid), v, prev_id, prev_value])
+		prev_value = v
+		prev_id = str(oid)
+
+static func _check_depth_reward_monotone(curve: Variant, overlays: Variant, blocks: Dictionary, errors: Array) -> void:
 	if not (curve is Dictionary):
 		return  # shape errors already reported by _check_depth_curve
 	var c: Dictionary = curve
@@ -817,13 +1055,18 @@ static func _check_depth_reward_monotone(curve: Variant, blocks: Dictionary, err
 	var cap: int = int(c.get("cap_depth_cells", 0))
 	if cap <= surface_depth:
 		return  # cap-depth error already reported
+	if not (overlays is Dictionary):
+		return  # overlay-shape errors already reported by _check_ore_overlays
 	var smoothstep: bool = str(c.get("curve", "linear")) == "smoothstep"
-	# The "gem" is the single highest ore value present in the registry; gem probability at a
-	# depth is the summed weight of every block at that max value (handles ties), over total.
+	# The "gem" is the single highest ore value present in the registry (now diamond); gem
+	# probability at a depth is the combined coverage of every ore at that max value (handles ties).
 	var gem_value: int = -1
 	for id in blocks.keys():
 		if blocks[id] is Dictionary:
 			gem_value = maxi(gem_value, _ore_value(blocks[id]))
+	# Ore overlay entries sorted rarest-first (ascending priority) — the SAME walk order the
+	# generator + Registry.full_odds_at use, so the priority-reduction budget matches generation.
+	var ores: Array = _overlay_priority_rows(overlays)
 	var span: int = cap - surface_depth
 	var sample_depths: Array = [
 		surface_depth,
@@ -835,7 +1078,7 @@ static func _check_depth_reward_monotone(curve: Variant, blocks: Dictionary, err
 	]
 	var rows: Array = []
 	for y in sample_depths:
-		rows.append(_curve_reward_at(sw, cw, blocks, surface_depth, cap, smoothstep, gem_value, int(y)))
+		rows.append(_combined_reward_at(sw, cw, ores, blocks, surface_depth, cap, smoothstep, gem_value, int(y)))
 	# Strict rise up to and including the cap (indices 0..4); index 5 is the past-cap freeze check.
 	for i in range(1, 5):
 		var lo: Dictionary = rows[i - 1]
@@ -843,18 +1086,66 @@ static func _check_depth_reward_monotone(curve: Variant, blocks: Dictionary, err
 		if hi["ev"] <= lo["ev"]:
 			errors.append("depth_bands: expected ore value per cell must strictly rise with depth — at y=%d EV %.3f <= shallower y=%d EV %.3f (SPEC AC-5.5.2)" % [hi["y"], hi["ev"], lo["y"], lo["ev"]])
 		if hi["gem"] <= lo["gem"]:
-			errors.append("depth_bands: rare-gem probability must strictly rise with depth — at y=%d gem-prob %.3f <= shallower y=%d gem-prob %.3f (SPEC AC-5.5.2)" % [hi["y"], hi["gem"], lo["y"], lo["gem"]])
-	# Boundedness: the past-cap sample must equal the cap sample (weights are clamped at the cap).
+			errors.append("depth_bands: rare-gem probability must strictly rise with depth — at y=%d gem-prob %.4f <= shallower y=%d gem-prob %.4f (SPEC AC-5.5.2)" % [hi["y"], hi["gem"], lo["y"], lo["gem"]])
+	# Boundedness: the past-cap sample must equal the cap sample (s is clamped at the cap).
 	var at_cap: Dictionary = rows[4]
 	var past_cap: Dictionary = rows[5]
 	if absf(float(past_cap["ev"]) - float(at_cap["ev"])) > 0.0001 or absf(float(past_cap["gem"]) - float(at_cap["gem"])) > 0.0001:
-		errors.append("depth_bands: reward must FREEZE at/below cap_depth_cells — past-cap EV/gem (%.3f/%.3f) differs from cap EV/gem (%.3f/%.3f); the curve is not clamped at the cap (SPEC AC-5.5.2)" % [past_cap["ev"], past_cap["gem"], at_cap["ev"], at_cap["gem"]])
+		errors.append("depth_bands: reward must FREEZE at/below cap_depth_cells — past-cap EV/gem (%.3f/%.4f) differs from cap EV/gem (%.3f/%.4f); the curve is not clamped at the cap (SPEC AC-5.5.2)" % [past_cap["ev"], past_cap["gem"], at_cap["ev"], at_cap["gem"]])
 
-## EV + gem-probability of the interpolated weight table at depth `y`. Pure mirror of
-## Registry.depth_weights_at (kept local so the data gate is self-contained).
-static func _curve_reward_at(sw: Variant, cw: Variant, blocks: Dictionary, surface_depth: int, cap: int, smoothstep: bool, gem_value: int, y: int) -> Dictionary:
+## Ore-overlay rows sorted rarest-first (ascending `priority`). Local mirror of
+## Registry.ore_priority so the data gate is self-contained.
+static func _overlay_priority_rows(overlays: Variant) -> Array:
+	if not (overlays is Dictionary):
+		return []
+	var ores: Variant = (overlays as Dictionary).get("ores")
+	if not (ores is Dictionary):
+		return []
+	var rows: Array = []
+	for id in (ores as Dictionary).keys():
+		var o: Variant = (ores as Dictionary)[id]
+		if o is Dictionary:
+			rows.append(o)
+	rows.sort_custom(func(a, b): return int(a.get("priority", 0)) < int(b.get("priority", 0)))
+	return rows
+
+## Combined base-filler + ore-overlay EV + gem-probability at depth `y`, with the priority-
+## reduction budget (rarest ore eats the cell-coverage budget first → honest overlap). Mirrors
+## the generation precedence + Registry.full_odds_at. The ore odds use the analytic proxy
+## 1-threshold (monotone in depth), an upper bound — acceptable: the golden grids pin the real
+## generated ids, and this proxy is exactly what the strict-rise invariant needs (design §1.3).
+static func _combined_reward_at(sw: Variant, cw: Variant, ores: Array, blocks: Dictionary, surface_depth: int, cap: int, smoothstep: bool, gem_value: int, y: int) -> Dictionary:
 	var t: float = clampf(float(y - surface_depth) / float(cap - surface_depth), 0.0, 1.0)
 	var s: float = (t * t * (3.0 - 2.0 * t)) if smoothstep else t
+	var remaining: float = 1.0
+	var ev: float = 0.0
+	var gem: float = 0.0
+	for o in ores:
+		var depth_min: int = int(o.get("depth_min", 0))
+		var odds: float = 0.0
+		if y >= depth_min:
+			var shallow: float = float(o.get("threshold_shallow", 1.0))
+			var deep: float = float(o.get("threshold_deep", 1.0))
+			var thr: float = shallow + s * (deep - shallow)
+			odds = clampf(1.0 - thr, 0.0, 1.0)
+		odds = odds * remaining  # priority reduction (rarest eats the budget first)
+		remaining -= odds
+		var bid: String = str(o.get("block_id", ""))
+		var v: int = 0
+		if blocks.has(bid) and blocks[bid] is Dictionary:
+			v = _ore_value(blocks[bid])
+		ev += odds * float(v)
+		if gem_value > 0 and v == gem_value:
+			gem += odds
+	if remaining < 0.0:
+		remaining = 0.0
+	# Base filler fills the remaining budget; add its EV-per-cell contribution.
+	ev += remaining * _base_filler_ev(sw, cw, blocks, s)
+	return { "y": y, "ev": ev, "gem": gem }
+
+## Expected ore value per cell of JUST the base filler weight table at interpolation s. The
+## filler is dirt/rock/hard_rock; rock carries a small $5 ore value so this is small but > 0.
+static func _base_filler_ev(sw: Variant, cw: Variant, blocks: Dictionary, s: float) -> float:
 	var ids: Dictionary = {}
 	for k in (sw as Dictionary).keys():
 		ids[k] = true
@@ -862,7 +1153,6 @@ static func _curve_reward_at(sw: Variant, cw: Variant, blocks: Dictionary, surfa
 		ids[k] = true
 	var total: float = 0.0
 	var value_sum: float = 0.0
-	var gem_weight: float = 0.0
 	for id in ids.keys():
 		var a: float = float((sw as Dictionary).get(id, 0.0))
 		var b: float = float((cw as Dictionary).get(id, 0.0))
@@ -870,17 +1160,10 @@ static func _curve_reward_at(sw: Variant, cw: Variant, blocks: Dictionary, surfa
 		if w <= 0.0:
 			continue
 		if not blocks.has(id) or not (blocks[id] is Dictionary):
-			continue  # unknown-block errors reported by _check_depth_curve
+			continue
 		total += w
-		var v: int = _ore_value(blocks[id])
-		value_sum += w * float(v)
-		if gem_value > 0 and v == gem_value:
-			gem_weight += w
-	return {
-		"y": y,
-		"ev": value_sum / total if total > 0.0 else 0.0,
-		"gem": gem_weight / total if total > 0.0 else 0.0,
-	}
+		value_sum += w * float(_ore_value(blocks[id]))
+	return value_sum / total if total > 0.0 else 0.0
 
 ## Ore value of a block dict (0 if no ore). Local helper so the depth-reward check does not
 ## need the full Registry-by-id indirection (blocks here is the raw block_types table).
@@ -929,6 +1212,13 @@ static func _check_explosives(explosives: Dictionary, balance: Dictionary, error
 			errors.append("explosives[%s]: blast_falloff must be an array" % id)
 		elif radius >= 1 and (falloff as Array).size() != radius + 1:
 			errors.append("explosives[%s]: blast_falloff length %d must equal blast_radius_cells+1 (%d)" % [id, (falloff as Array).size(), radius + 1])
+		# Each falloff entry must be in (0, 1] — a 0/negative creates a dead blast ring
+		# (silently skipped at runtime in blast.gd) the gate should catch, not hide.
+		if falloff is Array:
+			for i in range((falloff as Array).size()):
+				var fv: float = float((falloff as Array)[i])
+				if fv <= 0.0 or fv > 1.0:
+					errors.append("explosives[%s]: blast_falloff[%d] %s must be in (0, 1] (a 0 or negative value creates a dead blast ring)" % [id, i, str(fv)])
 		# Fuse-mode explosives must declare a positive fuse (AC-5.4.1).
 		if ex.get("detonation_mode", "") == "fuse_seconds":
 			if not ex.has("fuse_seconds") or float(ex.get("fuse_seconds", 0.0)) <= 0.0:
@@ -981,6 +1271,10 @@ static func _check_charge_motion_gate(explosives: Dictionary, balance: Dictionar
 		errors.append("balance: missing 'charge_min_travel_px' (on_rest charge motion gate)")
 	elif float(balance.get("charge_min_travel_px", -1.0)) < 0.0:
 		errors.append("balance: 'charge_min_travel_px' %s must be >= 0 (on_rest charge motion gate)" % str(balance.get("charge_min_travel_px")))
+	if not balance.has("sticky_min_delay_seconds"):
+		errors.append("balance: missing 'sticky_min_delay_seconds' (sticky charge stick-fuse floor)")
+	elif float(balance.get("sticky_min_delay_seconds", 0.0)) < 0.0:
+		errors.append("balance: 'sticky_min_delay_seconds' must be >= 0 (sticky charge stick-fuse floor)")
 
 static func _check_packs(packs: Dictionary, explosives: Dictionary, errors: Array) -> void:
 	if packs.is_empty():
@@ -1137,7 +1431,7 @@ static func _check_generation(gen: Variant, errors: Array) -> void:
 ## to a center column band. The depth window [min_depth, min_depth+span) must sit BELOW the sky
 ## (so it's in generated solid terrain, reachable down the shaft) — there is no mine floor to
 ## clamp it to in the infinite shaft. The column band is checked by _check_relic_band.
-static func _check_relics(relics: Variant, _curve: Variant, balance: Dictionary, errors: Array) -> void:
+static func _check_relics(relics: Variant, curve: Variant, balance: Dictionary, errors: Array) -> void:
 	if relics == null:
 		errors.append("missing table: relics.json")
 		return
@@ -1162,6 +1456,34 @@ static func _check_relics(relics: Variant, _curve: Variant, balance: Dictionary,
 	var mine_h: int = int(balance.get("mine_height_cells", 0))
 	if mine_h > 0 and min_depth > 0 and span >= 1 and min_depth + span > mine_h:
 		errors.append("relics: relic depth range [%d,%d) exceeds the bounded mine height %d" % [min_depth, min_depth + span, mine_h])
+	# Continuous-gen v0.7: the relic depth is the power-CDF inverse-transform selector. The
+	# GUARANTEED depth bounds it (the mine is COMPLETABLE — descend to here and the relic is on
+	# the corridor). Enforce min_depth < guaranteed <= cap_depth_cells (within the rich-but-bounded
+	# generated band) and a back-load k > 1 (k=1 is uniform; the design wants rare-shallow). The glow
+	# is the in-world purple beacon — its color must parse + pulse period > 0 (design §3, §5.3).
+	if not r.has("relic_guaranteed_depth_cells"):
+		errors.append("relics: missing 'relic_guaranteed_depth_cells' (the depth the relic is guaranteed by — completability)")
+	else:
+		var guaranteed: int = int(r.get("relic_guaranteed_depth_cells", 0))
+		if guaranteed <= min_depth:
+			errors.append("relics: 'relic_guaranteed_depth_cells' (%d) must be > 'min_depth_cells' (%d)" % [guaranteed, min_depth])
+		var cap_depth: int = 0
+		if curve is Dictionary:
+			cap_depth = int((curve as Dictionary).get("cap_depth_cells", 0))
+		if cap_depth > 0 and guaranteed > cap_depth:
+			errors.append("relics: 'relic_guaranteed_depth_cells' (%d) must be <= cap_depth_cells (%d) so the relic sits within the generated band (completability)" % [guaranteed, cap_depth])
+	if not r.has("relic_back_load_k"):
+		errors.append("relics: missing 'relic_back_load_k' (relic depth back-load exponent)")
+	elif int(r.get("relic_back_load_k", 0)) <= 1:
+		errors.append("relics: 'relic_back_load_k' %s must be > 1 (k=1 is uniform; the relic should be rarer shallow)" % str(r.get("relic_back_load_k")))
+	if not r.has("glow_color"):
+		errors.append("relics: missing 'glow_color' (the in-world purple relic beacon)")
+	elif not Color.html_is_valid(str(r.get("glow_color", ""))):
+		errors.append("relics: 'glow_color' '%s' must be a valid hex color" % str(r.get("glow_color")))
+	if not r.has("glow_pulse_seconds"):
+		errors.append("relics: missing 'glow_pulse_seconds' (relic glow pulse period)")
+	elif float(r.get("glow_pulse_seconds", 0.0)) <= 0.0:
+		errors.append("relics: 'glow_pulse_seconds' %s must be > 0" % str(r.get("glow_pulse_seconds")))
 	_check_relic_band(r, balance, errors)
 
 ## AC-5.6.1 (relic center band): the relic column is confined to |relic_col - center| <=
@@ -1176,9 +1498,19 @@ static func _check_relic_band(r: Dictionary, balance: Dictionary, errors: Array)
 	if half < 0:
 		errors.append("relics: 'relic_band_half_cells' must be >= 0 (AC-5.6.1)")
 		return
+	# Continuous-gen v0.7: the band is capped at 5 (an 11-wide band) — the relic anchor clamps to
+	# this cap, so a value above 5 silently wouldn't widen the band, and the gate makes that explicit.
+	if half > 5:
+		errors.append("relics: 'relic_band_half_cells' %d must be <= 5 (11-wide cap; the 2×2 relic stays on the descent corridor) (AC-5.6.1)" % half)
 	var width: int = int(balance.get("mine_width_cells", 0))
 	if width > 0 and (2 * half + 1) > width:
 		errors.append("relics: relic band width %d (2*%d+1) exceeds mine width %d (AC-5.6.1)" % [2 * half + 1, half, width])
+	# The 2×2 footprint (relic_at uses RELIC_W=2) must fit in [0,width): the rightmost band column
+	# is center+half and the footprint extends one more cell right, so center+half+1 < width.
+	if width > 0:
+		var center: int = int(width / 2)
+		if center + half + 1 >= width:
+			errors.append("relics: the 2×2 relic footprint at the band's right edge (col %d..%d) overflows mine width %d (AC-5.6.1)" % [center + half, center + half + 1, width])
 
 ## AC-5.5.x (pack affordability): the player can always afford to PARTICIPATE in the shop loop —
 ## the cheapest pack's price must be <= starting_money. Otherwise a fresh dig can't buy any pack

@@ -1,35 +1,63 @@
 class_name BlockGen
 extends RefCounted
-## Pure, deterministic procedural block generation (v0.4).
+## Pure, deterministic procedural block generation (v0.7 continuous gen).
 ##
 ## block_at(tables, mine_seed, x, y) -> block type id (String)
 ## relic_at(tables, mine_seed, cell)  -> bool (the dig's objective placement)
 ##
 ## Generation is a PURE, deterministic function of (mine_seed, absolute cell):
-## identical output forever, every run, every fresh instance (AC-5.1.4). The block
-## type is chosen with COHERENT noise (FastNoiseLite) so ore forms veins/clusters
-## rather than per-cell salt-and-pepper (AC-5.1.7), and the choice is depth-scaled
-## (AC-5.1.3) via the CONTINUOUS depth-weight curve (Registry.depth_weights_at:
-## surface_weights → cap_weights, bounded at the cap). The shaft is INFINITE in depth.
+## identical output forever, every run, every fresh instance (AC-5.1.4). It is a
+## THREE-LAYER resolve with a fixed priority (reports/continuous-gen-design.md §0):
 ##
-## Coherence + correct distribution at once: the coherent noise value is normalized
-## to an (approximately) uniform roll in [0,1) by a normal-CDF transform calibrated
-## with generation.noise_std, then mapped through the band's weighted CDF. Coherent
-## input -> neighbouring cells get similar rolls -> they tend to land on the same
-## block (veins); the uniform roll keeps the long-run frequencies matching the
-## configured weights (within tolerance).
+##   relic stamp  (priority 0, wins everything)        — relic_at(seed, cell)
+##      ↓ else
+##   ore overlay  (priority 1..N, rarest-first wins)   — _ore_overlay_at(...)
+##      ↓ else
+##   base filler  (depth-weight lerp dirt/rock/hard_rock)
+##
+## No mutable state, no chunk accumulation, no neighbour reads → order-independent.
+## The base filler keeps the proven coherent-noise → normal-CDF → weighted-pick pipeline
+## (golden-pinned, untouched). The ore overlay is a per-ore FastNoiseLite field seeded
+## `mine_seed ^ field_salt`, compared with an INTEGER-quantized threshold so a sub-LSB
+## float wobble can only flip cells on a bucket edge (the goldens pin block-id grids,
+## never floats — research source 3 cardinal rule, design §7). The relic is a single
+## seed-derived 2×2 anchor (power-CDF depth selector, center column band).
 ##
 ## NOTE on physics determinism: only this *logical* generation is deterministic.
-## Physics is NOT (v0.4, see SPEC). No physics enters this file.
+## Physics is NOT (v0.5, see SPEC). No physics enters this file.
 ##
 ## ACs: AC-5.1.3 (depth-banded gen), AC-5.1.4 (pure fn of seed+cell),
 ##      AC-5.1.7 (coherent veins), AC-5.6.1 (deterministic relic placement).
 
+## Relic footprint (top-left anchor + this many cells in each axis).
+const RELIC_W := 2
+const RELIC_H := 2
+
+## Quantization scale for the ore-overlay noise compare (design §2.1 / §7): both the
+## noise sample and the threshold are floored to int(v * NOISE_QUANTIZE) before the
+## >= compare, so the decision crosses an INTEGER boundary (golden-stable).
+const NOISE_QUANTIZE := 1024.0
+
 # ── Block selection ──────────────────────────────────────────────────────────
 
 ## Returns the block type id for absolute cell (x, y) under the given mine seed.
-## x = column (0..shaft_width-1), y = row (depth in cells, 0 = top).
+## x = column (0..mine_width-1), y = row (depth in cells, 0 = top). The 3-stage
+## fall-through: relic stamp → ore overlay → base filler. Ore/relic never stamp on air.
 static func block_at(tables: Dictionary, mine_seed: int, x: int, y: int) -> String:
+	if relic_at(tables, mine_seed, Vector2i(x, y)):
+		return "relic"
+	var base: String = _base_block_at(tables, mine_seed, x, y)
+	if base == "air":
+		return "air"
+	var ore: String = _ore_overlay_at(tables, mine_seed, x, y)
+	if ore != "":
+		return ore
+	return base
+
+## The base filler block id for absolute cell (x, y) — the proven depth-weight curve:
+## depth_weights_at → coherent noise → normal-CDF roll → weighted pick. UNCHANGED from
+## v0.4 except ores no longer appear in the weight tables (they moved to the overlay).
+static func _base_block_at(tables: Dictionary, mine_seed: int, x: int, y: int) -> String:
 	var weights: Dictionary = Registry.depth_weights_at(tables, y)
 	if weights.is_empty():
 		return "air"
@@ -38,65 +66,125 @@ static func block_at(tables: Dictionary, mine_seed: int, x: int, y: int) -> Stri
 	return _weighted_pick(weights, roll)
 
 ## Generates a rectangular region of block ids. Returns a 2D array [row][col].
-## Builds the noise field once and reuses it (still a pure fn of the inputs) — used
-## by chunk init and the golden test.
+## Calls block_at per cell (the full 3-stage resolve) — used by chunk init + the golden.
 static func generate_region(tables: Dictionary, mine_seed: int,
 		start_x: int, start_y: int, width: int, height: int) -> Array:
-	var noise: FastNoiseLite = _make_noise(tables, mine_seed)
 	var region: Array = []
 	for row in range(height):
 		var world_y: int = start_y + row
-		var weights: Dictionary = Registry.depth_weights_at(tables, world_y)
 		var row_data: Array = []
 		for col in range(width):
 			var world_x: int = start_x + col
-			if weights.is_empty():
-				row_data.append("air")
-			else:
-				row_data.append(_weighted_pick(weights, _roll_at(tables, noise, world_x, world_y)))
+			row_data.append(block_at(tables, mine_seed, world_x, world_y))
 		region.append(row_data)
 	return region
 
-# ── Relic placement (AC-5.6.1) ────────────────────────────────────────────────
+# ── Ore overlay (per-ore noise field, rarest-first wins) ──────────────────────
 
-## True iff this cell holds the mine's relic. The relic is the dig's objective: a
-## single cell placed as a PURE function of (mine_seed, config) and located at or
-## below the configured minimum depth (relics.min_depth_cells). Deterministic so an
-## unloaded chunk regenerates the relic in the same place. The relic rides on top of
-## whatever block the band generated at that cell (it is an objective overlay, not a
-## block type) — breaking that cell awards it (U3/AC-5.6.2).
+## The ore id whose noise field is super-threshold at (x, y), evaluated in priority
+## order (rarest/most-valuable first → first hit wins), or "" if none. Pure fn of
+## (mine_seed, cell). Depth-gated (an ore is impossible above its depth_min) and the
+## threshold falls with depth (richer deeper). The compare is integer-quantized so it
+## is golden-stable (design §2.1).
+static func _ore_overlay_at(tables: Dictionary, mine_seed: int, x: int, y: int) -> String:
+	var ores: Array = Registry.ore_priority(tables)  # rarest-first, validated unique priority
+	for o in ores:
+		var depth_min: int = int(o.get("depth_min", 0))
+		if y < depth_min:
+			continue
+		var raw: float = _ore_noise(tables, mine_seed, o).get_noise_2d(float(x), float(y))  # [-1,1]
+		var n: float = clampf((raw + 1.0) * 0.5, 0.0, 1.0)
+		var qn: int = int(floor(n * NOISE_QUANTIZE))
+		var thr: float = _ore_threshold(tables, o, y)
+		var qthr: int = int(floor(thr * NOISE_QUANTIZE))
+		if qn >= qthr:
+			return str(o.get("block_id", ""))
+	return ""
+
+## The depth-ramped rarity threshold for ore `o` at depth `y`: lerp(threshold_shallow,
+## threshold_deep, depth_curve_s(y)) — falls with depth (deeper never rarer). Shared
+## (analytic proxy 1-threshold) with Registry.ore_odds_at + the validator reward check.
+static func _ore_threshold(tables: Dictionary, o: Dictionary, y: int) -> float:
+	var s: float = Registry.depth_curve_s(tables, y)
+	var shallow: float = float(o.get("threshold_shallow", 1.0))
+	var deep: float = float(o.get("threshold_deep", 1.0))
+	return shallow + s * (deep - shallow)
+
+## The per-ore coherent noise field. Own seed `(mine_seed ^ field_salt) & 0x7FFFFFFF`
+## (decorrelated from the base field + every other ore), own frequency (= cluster size:
+## low → big veins, high → tiny specks). Pure: same inputs → same field on a fresh
+## instance every time (FastNoiseLite is deterministic).
+static func _ore_noise(tables: Dictionary, mine_seed: int, o: Dictionary) -> FastNoiseLite:
+	var n := FastNoiseLite.new()
+	n.seed = (mine_seed ^ int(o.get("field_salt", 0))) & 0x7FFFFFFF
+	n.noise_type = FastNoiseLite.TYPE_PERLIN
+	n.fractal_type = FastNoiseLite.FRACTAL_NONE
+	n.frequency = float(o.get("frequency", 0.08))
+	return n
+
+# ── Relic placement (AC-5.6.1) — 2×2 anchor, power-CDF depth, center band ──────
+
+## True iff this cell is one of the mine's relic's 4 cells. The relic is the dig's
+## objective: a single seed-derived 2×2 structure. Existence + position are a pure
+## function of (mine_seed, config) only — one anchor for the whole mine, re-derived
+## independently by every cell, so a relic straddling a chunk seam renders identically
+## from both sides regardless of stream order (design §3.2).
 static func relic_at(tables: Dictionary, mine_seed: int, cell: Vector2i) -> bool:
-	var rc: Vector2i = relic_cell(tables, mine_seed)
-	if rc.y < 0:
+	var a: Vector2i = relic_anchor(tables, mine_seed)
+	if a.y < 0:
 		return false
-	return cell == rc
+	return cell.x >= a.x and cell.x < a.x + RELIC_W and cell.y >= a.y and cell.y < a.y + RELIC_H
 
-## The absolute cell where this mine's relic sits, or (-1,-1) if generation cannot
-## place it (no shaft width / no relic config). Pure fn of (mine_seed, config).
-static func relic_cell(tables: Dictionary, mine_seed: int) -> Vector2i:
+## The top-left anchor cell of this mine's 2×2 relic, or (-1,-1) if generation cannot
+## place it. Pure fn of (mine_seed, config).
+##   ROW   = power-CDF inverse-transform "first-success at increasing depth" (design §3.1):
+##           depth = min + floor((max-min) * u^(1/k)), one hash draw → one depth, < max.
+##           Exactly once + GUARANTEED by relic_guaranteed_depth_cells (the mine is
+##           completable: descend to the guaranteed depth and the relic is on the corridor).
+##           k back-loads the distribution (rare shallow → common deep).
+##   COLUMN = center band |col - center| <= half, top-left clamped so the 2×2 stays in
+##            [0, width) (never overflows the right wall).
+static func relic_anchor(tables: Dictionary, mine_seed: int) -> Vector2i:
 	var relics: Dictionary = tables.get("relics", {})
 	if relics.is_empty():
 		return Vector2i(-1, -1)
 	var width: int = Registry.mine_width_cells(tables)
-	if width <= 0:
+	if width < RELIC_W:
 		return Vector2i(-1, -1)
-	var min_depth: int = int(relics.get("min_depth_cells", 0))
-	var span: int = maxi(1, int(relics.get("depth_span_cells", 1)))
-	# Two decorrelated hashes off the mine seed: one for the column, one for the row.
-	var hx: int = _hash2(mine_seed, 0x9E3779B1)
-	var hy: int = _hash2(mine_seed, 0x85EBCA77)
-	# Column is confined to a (2*half+1)-wide band CENTERED on the mine (AC-5.6.1): with
-	# half = 6 this is the 13-wide band |relic_col - center| <= 6 — so the relic always
-	# sits on/near the descent corridor in the infinite shaft, not against a far wall.
+	var min_d: int = int(relics.get("min_depth_cells", 0))
+	var max_d: int = int(relics.get("relic_guaranteed_depth_cells", maxi(min_d + 1, 9000)))
+	if max_d <= min_d:
+		max_d = min_d + 1
+	var k: int = maxi(2, int(relics.get("relic_back_load_k", 4)))
+	# ROW: one hash draw → u in [0,1) → one trigger depth < max_d (exactly once, guaranteed).
+	var u: float = float(_hash2(mine_seed, 0xC0FFEE) & 0xFFFFFF) / float(0x1000000)
+	var depth: int = min_d + int(floor(float(max_d - min_d) * pow(u, 1.0 / float(k))))
+	depth = clampi(depth, min_d, max_d - 1)
+	# COLUMN: center band, top-left clamped so the 2×2 never overflows the right wall.
 	var center: int = int(width / 2)
-	var half: int = maxi(0, Registry.relic_band_half_cells(tables))
-	var span_cols: int = 2 * half + 1
-	var col: int = center + (hx % span_cols) - half
-	col = clampi(col, 0, width - 1)
-	var depth: int = min_depth + (hy % span)
+	var half: int = mini(maxi(0, Registry.relic_band_half_cells(tables)), 5)
+	var hx: int = _hash2(mine_seed, 0x5EED)
+	var col: int = center - half + (hx % (2 * half + 1))
+	col = clampi(col, 0, width - RELIC_W)
 	return Vector2i(col, depth)
 
-# ── Noise → uniform roll ───────────────────────────────────────────────────────
+## Backwards-compatible alias: the relic's top-left anchor cell (callers that ask "where
+## is the relic" — block_grid resolves the 2×2 footprint from this). Pure fn of seed.
+static func relic_cell(tables: Dictionary, mine_seed: int) -> Vector2i:
+	return relic_anchor(tables, mine_seed)
+
+## The 4 absolute cells of this mine's relic footprint, or [] if none. Pure fn of seed.
+static func relic_footprint(tables: Dictionary, mine_seed: int) -> Array:
+	var a: Vector2i = relic_anchor(tables, mine_seed)
+	if a.y < 0:
+		return []
+	var out: Array = []
+	for dy in range(RELIC_H):
+		for dx in range(RELIC_W):
+			out.append(Vector2i(a.x + dx, a.y + dy))
+	return out
+
+# ── Noise → uniform roll (base filler) ─────────────────────────────────────────
 
 ## Builds the coherent noise field for a mine seed. Pure: same seed -> same field on
 ## a fresh instance every time (FastNoiseLite is deterministic). Parameters come from

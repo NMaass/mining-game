@@ -20,10 +20,11 @@ fi
 TARGET="${1:-tests}"
 
 # Ensure the project is imported (first run generates .godot/). Idempotent.
-"${GODOT_BIN}" --headless --path . --import >/dev/null 2>&1 || true
+LOG_FILE="${TMPDIR:-/tmp}/mining_game_tests.log"
+"${GODOT_BIN}" --headless --path . --log-file "${LOG_FILE}" --import
 
 echo "== Running gdUnit4 suite: ${TARGET} =="
-"${GODOT_BIN}" --headless --path . \
+"${GODOT_BIN}" --headless --path . --log-file "${LOG_FILE}" \
   -s res://addons/gdUnit4/bin/GdUnitCmdTool.gd \
   --add "res://${TARGET}" \
   --ignoreHeadlessMode \

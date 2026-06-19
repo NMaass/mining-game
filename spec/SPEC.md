@@ -1,6 +1,9 @@
 # SPEC.md — Untitled Vertical Mining Game
 
-**Status:** v0.5.0 (design pivot: bounded mines + prestige offer UI + depth resource-odds HUD; 2026-06-15)
+**Status:** v0.6.0 (reconciled to code: infinite shaft + visual platform; 2026-06-19). v0.5.0
+introduced bounded mines + prestige offer UI + depth resource-odds HUD (2026-06-15); v0.6.0
+reverts mine geometry to an infinite shaft and makes the platform a visual anchor, matching
+the shipped code. See the v0.5→v0.6 changelog below.
 **Source of truth.** Code is the build output of this document. When code and spec
 disagree, the spec wins or the spec gets updated — never silent drift.
 
@@ -81,14 +84,14 @@ post-slice plan + gap register is `ROADMAP.md`.
 ## 1. Vision & outcomes
 
 A portrait, mobile-first, physics-driven mining game built around **economic optimization** inside
-**bounded, excavatable mines**. Each mine is a fixed-width × depth rectangular volume under the
-platform. You drop explosives down the shaft to blast ore loose for money, spend that money on
+**an infinite-depth shaft**. The mine is a fixed-width, unbounded-depth column under the platform,
+generated on demand as the platform descends. You drop explosives down the shaft to blast ore loose for money, spend that money on
 **more efficient charges**, and reach the mine's **relic** to earn **prestige**. You can never get
 stuck and you can never lose: a **free, unlimited, weak charge** is always in the tray — it just
 digs slowly and inefficiently, so the optimization pressure is "do better," never "game over."
 
 Breaking a mine's relic block **offers prestige**: the player can **accept** (bank **1 prestige
-point** and end the dig) or **keep digging** to clear more of the bounded mine. Prestige makes the
+point** and end the dig) or **keep digging** deeper into the shaft. Prestige makes the
 next dig **stronger** (the hook is power growth). You **buy access** to progressively **harder**
 mines, where your current charges are less effective until you re-optimize. Taking the **final
 mine's relic** is the authored ending — the game is **finite and completable**, with a **soft cap**
@@ -126,8 +129,9 @@ remain this game's own.
 **In scope:**
 - A hub of multiple **authored** mines; the player picks which to dig and **buys access** to deeper,
   harder ones.
-- A **bounded rectangular mine** per dig (fixed width × depth in cells), fully generated at dig
-  start, with destructible square-block terrain.
+- An **infinite-depth mine** per dig (fixed width in cells, unbounded depth), generated on demand
+  via a sliding chunk window, with destructible square-block terrain. (v0.5 proposed a bounded
+  rectangular volume; v0.6 reverted to the infinite shaft that shipped.)
 - Drag-to-aim (angle) + throw-button physics; a **forgiving** aim with an **initial-arc** preview
   (pre-first-bounce only).
 - A **free unlimited weak charge** always available; finite **efficient** charges bought from packs
@@ -202,7 +206,7 @@ remain this game's own.
 | **Aim preview** | **Initial-arc only** (up to first bounce); not bounce-accurate, not preview==actual | Forgiving aim; the post-bounce uncertainty is intentional fun |
 | Controls | Drag adjusts launch **angle**; **throw button** commits; power = charge base impulse; forgiving | Readable, low-friction aiming; the decisions are *which charge where*, not pixel-precision |
 | **Blast** | **Fuzzy/random radius** scaled from detonation position; randomness via an **injected seed** | Adds variance/feel; injected seed keeps it testable |
-| Mine geometry | Bounded rectangular mine volume per dig (fixed width × depth in cells), chunked in memory | Fits portrait; the mine is a completable volume; depth is the difficulty axis |
+| Mine geometry | Infinite-depth shaft per dig (fixed width, unbounded depth in cells), chunked in memory via a sliding window | Fits portrait; depth is the difficulty axis; resident cell count stays bounded |
 | Win condition | Final mine's relic → authored ending (soft cap) | Finite + completable; you may keep optimizing after |
 | Destructible terrain | Block-based (TileMapLayer); each cell is a typed square block, removed on detonation | Motherload-adjacent chunky mine read; Dome Keeper / Diggin support the block-based modern-polish reference; per-tile collision free; no marching-squares risk |
 | Block damage | Blocks have HP; a blast deals damage; per-cell HP/damage in a parallel per-chunk array; a shared cracked-overlay layer shows stages; block breaks at 0 HP | TileMap cells can't store mutable per-cell HP; state lives beside the map |
@@ -217,7 +221,7 @@ remain this game's own.
 | Screen navigation | Mine stays instanced and **paused**; Hub/Shop/Upgrades/Settings are modal overlays | Run state (terrain, in-flight, collectibles) is never lost or rebuilt |
 | HUD | Minimal: money + depth top-left, nav button top-right, charge tray + throw button bottom, compact relic-progress | Keeps the play space breathing |
 | Save | Godot Resource serialization + `save_version` + migration + atomic write/backup | Local, simple; survives updates and interrupted writes |
-| Tunables | JSON in `/data`, schema-validated on load | Diff-friendly balancing; never hardcoded |
+| Tunables | JSON in `/data`, validated by the `DataValidator` CI gate (load-time validation is ROADMAP) | Diff-friendly balancing; never hardcoded |
 | Master palette | Adopt an existing proven colorblind-safe palette, locked before bulk art | Unblocks the art pipeline |
 | Motion default | Calm by default; intensity slider (seeded from OS reduced-motion where detectable) | Minimal aesthetic + accessibility |
 
@@ -228,24 +232,28 @@ remain this game's own.
 Acceptance criteria use EARS phrasing with stable IDs. IDs removed in v0.4 are listed as **REMOVED**
 so traceability tooling doesn't silently lose them; new IDs continue the numbering.
 
-### 5.1 Mine: bounded rectangular mine volume
-- **AC-5.1.1** The system SHALL represent each mine as a bounded rectangular grid of square blocks
-  (TileMapLayer) with a fixed width and depth in cells defined by the active mine's archetype.
+### 5.1 Mine: infinite-depth shaft (v0.6: reconciled to code)
+- **AC-5.1.1** The system SHALL represent each mine as a grid of square blocks (TileMapLayer) with
+  a fixed width in cells and an unbounded depth, generated on demand via chunked loading.
+  (v0.5 required a bounded rectangular volume; v0.6 reverts to the infinite shaft that shipped.)
 - **AC-5.1.2** The system SHALL keep only a sliding window of resident chunks, recycling off-screen
   chunks, so resident cell count stays bounded regardless of mine depth.
-- **AC-5.1.3** The full mine volume SHALL be generated at dig start using **FastNoiseLite** to pick
-  each block's type per depth band. The generation SHALL be a pure function of (mine seed, absolute
-  cell coordinate) so any unloaded chunk regenerates identically.
-- **AC-5.1.4** The mine's bounds (width × depth) SHALL come from data, not code; each mine archetype
-  SHALL declare `width_cells` and `depth_cells`.
+- **AC-5.1.3** The mine SHALL be generated using **FastNoiseLite** to pick each block's type per
+  depth band. The generation SHALL be a pure function of (mine seed, absolute cell coordinate) so
+  any unloaded chunk regenerates identically.
+- **AC-5.1.4** The mine's width SHALL come from data, not code. Depth is unbounded (the
+  `mine_height_cells: 0` sentinel in `/data` denotes an infinite shaft). Per-mine
+  `width_cells`/`depth_cells` (bounded volumes) is a ROADMAP option, not the v0.6 shipping plan.
 - **AC-5.1.5** Each block SHALL carry a type id resolving — via the canonical block-type registry —
   to hardness, base HP, ore/loot content, and value.
 - **AC-5.1.6** Blocks SHALL provide collision via the TileMap physics layer; dropped charges bounce
   off them before detonating.
 - **AC-5.1.7** Generated noise SHALL be **coherent** (FastNoiseLite), producing ore veins/clusters
   rather than per-cell salt-and-pepper, so there are formations worth optimizing toward.
-- **AC-5.1.8** The platform SHALL descend through the bounded volume and stop at the mine's bottom;
-  the relic SHALL be placed within the bounded depth.
+- **AC-5.1.8** The platform SHALL descend through the shaft as the player clears beneath it; there
+  is no mine bottom in the infinite-shaft model (the reachable depth is the deepest supported row).
+  The relic SHALL be placed at or below a configured minimum depth. (v0.5 required a bounded
+  bottom + relic within it; v0.6 reverts to the infinite model.)
 
 ### 5.2 Destructible terrain (block HP + damage stages)
 - **AC-5.2.1** Each block SHALL have HP derived from its type's hardness via the data table, then
@@ -299,9 +307,10 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 - **AC-5.3.8** The system SHALL NOT have any lose/fail state. A throw SHALL always be possible
   (at minimum with the free charge).
 - **AC-5.3.9** WHEN a charge is launched from the platform muzzle at the default straight-down angle
-  in an otherwise open shaft, it SHALL pass below the platform collision within one physics second;
-  launcher/platform geometry SHALL NOT trap the charge above the mine or act as a solid lid over the
-  shaft.
+  in an otherwise open shaft, it SHALL descend into the mine unobstructed (v0.6: the platform is a
+  VISUAL anchor, not a physics body — the charge passes through it via `collision_mask=1` (terrain-only),
+  so it is never trapped above the shaft by construction). Launcher/platform geometry SHALL NOT act as
+  a solid lid over the shaft.
 
 ### 5.4 Explosives & packs (gacha)
 - **AC-5.4.1** An explosive type SHALL be a data resource with: mass, bounce, friction, base impulse,
@@ -329,7 +338,9 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 - **AC-5.5.1** WHEN a block carrying ore/gems is destroyed, the system SHALL auto-credit money by the
   item's value (v0: no pickup step; a fly-to-counter animation is cosmetic only), exactly once per
   cell.
-- **AC-5.5.2** Loot SHALL be drawn from the current depth band's weighted block table. With increasing
+- **AC-5.5.2** Loot SHALL be resolved by a two-layer model: a depth-banded weighted **filler** table
+  (dirt/rock/hard_rock) over which rare **ore overlays** (`ore_overlays.json`) are stamped per-ore via
+  coherent FastNoiseLite fields with a rarest-first priority budget. With increasing
   depth, the **expected ore value per cell SHALL strictly rise** and the **rare-gem (highest-value
   block type) probability SHALL strictly rise**, so deeper digging is strictly more rewarding and a
   deep gem strike can fund the next efficient pack (the in-dig comeback). Common low- or zero-value
@@ -338,19 +349,24 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   *(v0.4.1: replaced the prior "floor (minimum value) rises" clause — see changelog.)*
 - **AC-5.5.3** Money is per-dig: earned and spent within a dig and reset when a new dig starts (§5.6).
 - **AC-5.5.4** All prices, values, weights, efficiency descriptors, and HP multipliers SHALL come
-  from editable, schema-validated data files.
+  from editable data files validated by the `DataValidator` CI gate (ad-hoc GDScript rules + JSON
+  schemas where present). "Schema-validated" here means the data gate enforces shape + cross-refs +
+  ranges at build/test time; load-time validation is a ROADMAP hardening item, not a v0.6 shipping claim.
 - **AC-5.5.5** No `/data` configuration SHALL produce a stall: the free unlimited charge SHALL always
   be able to break the floor beneath the platform (slowly), so progress is always possible without
   spending. The data gate SHALL verify this property against each mine's floor-HP scaling.
 
 ### 5.6 Relics, prestige & power growth
 - **AC-5.6.1** Each mine SHALL contain a relic placed at generation time as a pure function of
-  (mine seed, cell), located below a configured minimum depth for that mine. (Placement is
-  deterministic; it is the dig's objective, not a random per-break drop.)
-- **AC-5.6.2** WHEN the relic's block is destroyed, the system SHALL pause the dig and **offer**
-  prestige. The player MAY either **accept** (bank **1 prestige point**, end the dig, and show the
-  prestige/dig-end screen) or **decline** (resume the current dig and keep clearing the bounded
-  mine). The relic SHALL never be a poolable/recyclable body. On the first relic ever found, the
+  (mine seed, cell), located below a configured minimum depth. The relic occupies a **2×2 cell
+  footprint** (a seed-derived anchor; `RELIC_W`/`RELIC_H` in `block_gen.gd`), stamped at priority 0
+  over all other layers. (Placement is deterministic; it is
+  the dig's objective, not a random per-break drop. v0.6: the minimum depth is a global `min_depth_cells`
+  in `relics.json`, not per-mine — per-mine relic windows are a ROADMAP option with bounded mines.)
+- **AC-5.6.2** WHEN the relic's 2×2 footprint is fully excavated (all four cells destroyed), the
+  system SHALL pause the dig and **offer** prestige, firing the offer exactly once on the last relic
+  cell's break. The player MAY either **accept** (bank **1 prestige point**, end the dig, and show the
+  prestige/dig-end screen) or **decline** (resume the current dig and keep descending the shaft). The relic SHALL never be a poolable/recyclable body. On the first relic ever found, the
   system SHALL trigger the one-time narrative reveal.
 - **AC-5.6.3** WHEN prestige is accepted, the system SHALL bank **1 prestige point**, mark the
   relic collected, reset per-dig state (money, tray's finite charges, depth), and return to a state
@@ -366,9 +382,12 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   optimizing, but completion is recorded.
 
 ### 5.7 Mining platform & descent
-- **AC-5.7.1** The platform SHALL be a physical object near the top of the shaft and the camera's
-  anchor; the predicted arc and live charges launch from its muzzle. It SHALL read as a launcher/rig,
-  not as a horizontal blocker that visually or physically caps the mine opening.
+- **AC-5.7.1** The platform SHALL be the camera's anchor near the top of the shaft; the predicted
+  arc and live charges launch from its muzzle. It SHALL read as a launcher/rig, not as a horizontal
+  blocker that visually or physically caps the mine opening. (v0.6: the platform is a VISUAL anchor,
+  not a physics body — charges pass through it with `collision_mask=1` (terrain-only). This satisfies
+  "not a solid lid" by construction. A physical platform with charge↔platform collision is a ROADMAP
+  option.)
 - **AC-5.7.2** WHILE enough cells directly beneath the platform are cleared (threshold configurable
   and upgrade-reducible), the system SHALL lower the platform by tweening its target position over a
   configured duration (not an instantaneous snap).
@@ -407,7 +426,8 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   SHALL have no gameplay effect (money credited on destruction per §5.5; relics exempt per §5.6).
 - **AC-5.9.3** The cap SHALL be expressed in **active (awake)** bodies, with separate web/mobile and
   desktop caps in `/data`; collectibles SHALL NOT collide with each other or with the in-flight charge
-  (masks: charge↔terrain+platform only; collectibles↔terrain only).
+  (v0.6 masks: charge↔terrain only — `collision_mask=1`, the platform is visual and not a collider;
+  collectibles↔terrain only).
 
 ### 5.10 Accessibility & settings
 - **AC-5.10.1** Settings SHALL include: motion/screen-shake intensity slider (default low, seeded from
@@ -459,7 +479,7 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 
 ## 6. Build order (prototype-first)
 
-1. **Vertical slice of the core loop:** one bounded mine (fixed width × depth); drag-to-aim-angle +
+1. **Vertical slice of the core loop:** one infinite shaft (fixed width, unbounded depth); drag-to-aim-angle +
    throw button; **forgiving aim** with an **initial-arc preview**; a block-grid mine volume with the
    **per-cell HP/damage array** (HP scaled by depth + mine hardness); a charge that bounces on blocks,
    detonates per its `detonation_mode`, and clears a square cavity via a **fuzzy (seeded) blast**;
@@ -532,3 +552,9 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 > **Resolved in v0.5**: mine geometry → **bounded rectangular volume**; prestige formula → **exactly
 > 1 point per relic** (money does not convert); relic flow → **offer UI** (accept or keep digging);
 > depth readout → **resource odds at current depth**; no passive income.
+>
+> **Resolved in v0.6** (reconcile docs to shipped code): mine geometry → **infinite shaft** (the
+> v0.5 bounded-volume pivot was reverted in code; `mine_height_cells: 0` is the infinite sentinel);
+> platform → **visual anchor, not a physics body** (charges pass through it; `collision_mask=1`
+> = terrain-only, not the v0.5-pinned `5`). The ACs below are amended to match. Per-mine
+> `width_cells`/`depth_cells` and a physical platform remain a ROADMAP option, not the shipping plan.

@@ -422,3 +422,29 @@ func test_keyboard_aim_zero_rate_is_inert() -> void:
 func test_keyboard_aim_zero_delta_is_inert() -> void:
 	# A 0 delta (paused / first frame) makes no change.
 	assert_float(Aim.keyboard_angle_step(0.3, 1, 90.0, 0.0)).is_equal(0.3)
+
+# ── AimLine dashed-arc walk: bounded, never hangs (regression) ─────────────────
+
+const AimLine := preload("res://scripts/ui/aim_line.gd")
+
+func test_dash_spans_bounded_on_pathological_arc() -> void:
+	# REGRESSION (the 360°-upward-aim FREEZE): an aim arc with an enormous segment and a non-finite
+	# point must NOT make the dash walk iterate unbounded. dash_spans is capped + skips non-finite
+	# segments. Pre-fix this looped ~5e8/period times and hung the renderer at 100% CPU.
+	var pts := PackedVector2Array([Vector2(0, 0), Vector2(10, 10), Vector2(5e8, 5e8), Vector2(INF, INF)])
+	var spans: Array = AimLine.dash_spans(pts, 0.0, 18.0, 14.0)
+	assert_int(spans.size()).is_less_equal(1024)
+
+func test_dash_spans_normal_arc_produces_dashes() -> void:
+	# A normal short downward arc still yields a sane, non-empty set of dashes.
+	var pts := PackedVector2Array([Vector2(0, 0), Vector2(0, 120)])
+	var spans: Array = AimLine.dash_spans(pts, 0.0, 18.0, 14.0)
+	assert_int(spans.size()).is_greater(0)
+	assert_int(spans.size()).is_less_equal(1024)
+
+func test_dash_spans_all_gaps_terminates() -> void:
+	# Even if the march puts a long segment entirely in 'gap' phase, the walk still terminates
+	# (every iteration advances >= 0.5px and the total-iteration cap backstops it).
+	var pts := PackedVector2Array([Vector2(0, 0), Vector2(0, 1.0e7)])
+	var spans: Array = AimLine.dash_spans(pts, 0.0, 0.001, 50.0)  # near-zero dash, big gap
+	assert_int(spans.size()).is_less_equal(1024)

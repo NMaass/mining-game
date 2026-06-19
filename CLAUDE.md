@@ -1,7 +1,7 @@
 # CLAUDE.md — Claude Code operating guide
 
 Folder-scoped guide auto-loaded for this project. It is the **fast path**, derived from
-`spec/AGENTS.md` (the full operational reference). Design lives in `spec/SPEC.md` (**v0.5.0**); the MVP
+`spec/AGENTS.md` (the full operational reference). Design lives in `spec/SPEC.md` (**v0.6.0**); the MVP
 build contract is `spec/VERTICAL_SLICE.md` (its **§0 is the v0.3→v0.4 salvage map**); the post-slice
 plan + gap register is `spec/ROADMAP.md`. When code and spec disagree, the spec wins or the spec gets
 updated — never silent drift.
@@ -113,8 +113,9 @@ Reports land in `reports/`. CI runs both gates on push (`.github/workflows/ci.ym
 - **Specs** → `spec/SPEC.md`, `spec/AGENTS.md`, `spec/VERTICAL_SLICE.md`, `spec/ROADMAP.md`, `spec/AUDIT.md`.
 
 ## Hard conventions
-- **Tunables are data, never code.** Balance lives in `data/*.json`, validated on load by
-  `DataValidator` (`scripts/core/data_validator.gd`). Add a rule there for every new table/join.
+- **Tunables are data, never code.** Balance lives in `data/*.json`, validated by the `DataValidator`
+  CI gate (`scripts/core/data_validator.gd`); load-time schema validation is a ROADMAP hardening item.
+  Add a rule there for every new table/join.
 - **Canonical block-type registry** (`data/block_types.json`): block id is the join key; depth/loot
   tables reference blocks by id, never redefine values. **`max_hp` is an authored literal field per
   block — NOT derived from `hardness`**; the per-cell HP store is seeded from it once at chunk init
@@ -130,7 +131,8 @@ Reports land in `reports/`. CI runs both gates on push (`.github/workflows/ci.ym
   (→ bank prestige), never by running out of charges.
 - **Physics shapes are primitives for dynamic bodies** (charge/collectibles = circle/capsule);
   **terrain colliders are square tiles** on the TileMap physics layer.
-- **Collision masks are explicit:** charge ↔ terrain+platform; collectibles ↔ terrain only;
+- **Collision masks are explicit (v0.6):** charge ↔ terrain only (`collision_mask=1`; the platform
+  is a VISUAL anchor, not a physics body — charges pass through it); collectibles ↔ terrain only;
   particles never collide. Launched charges use continuous CD (no tunneling).
 - **Particles for cosmetics; pooled rigid bodies only for collectibles** (cap = active/awake bodies,
   per-target values in `/data`; settled bodies sleep). Explosions are GPUParticles2D, **never

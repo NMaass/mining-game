@@ -20,3 +20,25 @@
 - **Tool:** Python Pillow script (one-off, not shipped).
 - **License:** No claimed copyright; placeholder assets intended for replacement before release.
 - **Project use:** Temporary 8-bit-style player sprite and sky gradient used until final art is authored.
+
+## Runtime placeholder UI art and particles
+
+- **Assets:** Charge selector icons, shop crate icons, crate-reveal reward cards, and rare-reveal pixel particles generated at runtime by `scripts/ui/charge_icon.gd` and `scripts/ui/crate_reveal.gd`.
+- **Author:** Generated programmatically from the project master palette (`data/palette.json`) for vertical-slice placeholder use.
+- **Generated:** 2026-06-18
+- **Tool:** Godot 4 runtime image/particle generation; no named-artist or IP style prompt used.
+- **License:** No claimed copyright; placeholder assets intended for replacement before release.
+- **Commercial use:** Allowed as project-authored placeholder material.
+- **Share-alike / copyleft:** None.
+- **Project use:** Temporary 8-bit charge/crate identity, non-color rarity cues, and crate-opening reveal particles.
+
+## Runtime placeholder audio and music
+
+- **Assets:** Placeholder SFX events and chiptune music loops synthesized from `data/audio.json` by `scripts/systems/audio.gd`.
+- **Author:** Generated programmatically from authored frequency/noise/envelope data for vertical-slice placeholder use.
+- **Generated:** 2026-06-18
+- **Tool:** Godot 4 runtime `AudioStreamWAV` synthesis.
+- **License:** No claimed copyright; placeholder audio intended for replacement or full mix pass before release.
+- **Commercial use:** Allowed as project-authored placeholder material.
+- **Share-alike / copyleft:** None.
+- **Project use:** UI feedback, crate reveal stings, gameplay SFX, and menu/mining/shop/relic music beds.

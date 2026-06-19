@@ -42,11 +42,11 @@ func test_ore_value_mult_default_is_one() -> void:
 # ── Ore crediting (AC-5.5.1) ───────────────────────────────────────────────
 
 func test_credit_ore_block() -> void:
-	# AC-5.5.1: breaking an ore block credits exactly its value
+	# AC-5.5.1: breaking an ore block credits exactly its value (copper = $10 prominent tier)
 	var econ := Economy.new(_tables)
 	var value: int = econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(value).is_equal(12)
-	assert_int(econ.money).is_equal(12)
+	assert_int(value).is_equal(10)
+	assert_int(econ.money).is_equal(10)
 
 func test_credit_gold_ore() -> void:
 	var econ := Economy.new(_tables)
@@ -72,14 +72,14 @@ func test_no_double_credit() -> void:
 	econ.credit(Vector2i(0, 0), "ore_copper")
 	var second: int = econ.credit(Vector2i(0, 0), "ore_copper")
 	assert_int(second).is_equal(0)
-	assert_int(econ.money).is_equal(12)  # Only credited once
+	assert_int(econ.money).is_equal(10)  # Only credited once
 
 func test_credit_accumulates() -> void:
 	var econ := Economy.new(_tables)
 	econ.credit(Vector2i(0, 0), "ore_copper")
 	econ.credit(Vector2i(1, 0), "ore_gold")
 	econ.credit(Vector2i(2, 0), "dirt")
-	assert_int(econ.money).is_equal(42)  # 12 + 30 + 0
+	assert_int(econ.money).is_equal(40)  # 10 + 30 + 0
 
 # ── Credit blast (convenience) ──────────────────────────────────────────────
 
@@ -92,8 +92,8 @@ func test_credit_blast() -> void:
 		Vector2i(2, 0): "rock",
 	}
 	var total: int = econ.credit_blast(cleared, block_ids)
-	assert_int(total).is_equal(42)  # 12 + 30 + 0
-	assert_int(econ.money).is_equal(42)
+	assert_int(total).is_equal(45)  # 10 + 30 + 5 (rock is now a $5 ore)
+	assert_int(econ.money).is_equal(45)
 
 # ── Debit / can_afford ──────────────────────────────────────────────────────
 
@@ -111,17 +111,14 @@ func test_debit_unaffordable() -> void:
 	assert_int(econ.money).is_equal(0)
 
 # ── Depth reward: EV + gem probability rise with depth (AC-5.5.2) ───────────
-# These test the REAL production loot contract: blocks are placed by BlockGen from
-# depth_bands weights and credited on break (there is no runtime sampler — the old
-# draw_loot was dead code, removed v0.4.1). We assert the property the player feels —
-# deeper is strictly more rewarding — directly over the band weights × registry ore
-# values. block_gen's distribution test proves generated frequencies ≈ band weights,
-# so rising-EV-over-weights composes to rising realized EV. The same monotonicity is
-# a hard data-gate invariant (see test_data_integrity depth-reward tests).
+# These test the production loot contract: BlockGen lays filler from depth_bands, then
+# stamps ore from the ore_overlays layer. We assert the property the player feels —
+# deeper is strictly more rewarding — over Registry.full_odds_at(), the same combined
+# odds function used by the HUD and validator.
 
 ## Expected ore value per cell for the band that contains `depth_cells`.
 func _band_expected_value(depth_cells: int) -> float:
-	var weights: Dictionary = Registry.band_weights_at(_tables, depth_cells)
+	var weights: Dictionary = Registry.full_odds_at(_tables, depth_cells)
 	var total: float = 0.0
 	var value_sum: float = 0.0
 	for k in weights.keys():
@@ -136,7 +133,7 @@ func _band_gem_probability(depth_cells: int) -> float:
 	var gem_value: int = 0
 	for id in Registry.block_ids(_tables):
 		gem_value = maxi(gem_value, Registry.block_ore_value(_tables, id))
-	var weights: Dictionary = Registry.band_weights_at(_tables, depth_cells)
+	var weights: Dictionary = Registry.full_odds_at(_tables, depth_cells)
 	var total: float = 0.0
 	var gem_weight: float = 0.0
 	for k in weights.keys():
@@ -193,8 +190,8 @@ func test_reset_run_clears_credit_tracking() -> void:
 	# After reset, the same cell can be credited again (new run).
 	var econ := Economy.new(_tables)
 	econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(econ.money).is_equal(12)
+	assert_int(econ.money).is_equal(10)
 	econ.reset_run()
 	var value: int = econ.credit(Vector2i(0, 0), "ore_copper")
-	assert_int(value).is_equal(12)
-	assert_int(econ.money).is_equal(12)
+	assert_int(value).is_equal(10)
+	assert_int(econ.money).is_equal(10)

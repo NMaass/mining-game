@@ -10,6 +10,7 @@ signal finished
 
 const PIXEL_FONT := preload("res://art/fonts/PixelifySans.ttf")
 const ChargeIconScript := preload("res://scripts/ui/charge_icon.gd")
+const _PixelUi := preload("res://scripts/ui/pixel_ui.gd")
 
 var _tables: Dictionary = {}
 var _motion: float = 1.0
@@ -22,6 +23,9 @@ var _title: Label
 var _caption: Label
 var _items: HBoxContainer
 var _beam: ColorRect
+var _particle_layer: Node2D
+var _particle_texture: Texture2D
+var _shake_tween: Tween = null
 
 func _ready() -> void:
 	layer = 30
@@ -78,7 +82,7 @@ func _build() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
 	_panel.custom_minimum_size = Vector2(520, 430)
-	PixelUi.apply_panel(_panel)
+	_PixelUi.apply_panel(_panel)
 	center.add_child(_panel)
 
 	var box := VBoxContainer.new()
@@ -112,7 +116,7 @@ func _build() -> void:
 	_crate = TextureRect.new()
 	_crate.name = "Crate"
 	_crate.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_crate.stretch_mode = TextureRect.STRETCH_NEAREST
+	_crate.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_crate.custom_minimum_size = Vector2(128, 128)
 	_crate.position = Vector2(146, 24)
 	stage.add_child(_crate)
@@ -131,11 +135,17 @@ func _build() -> void:
 	_caption.add_theme_font_size_override("font_size", 20)
 	box.add_child(_caption)
 
+	_particle_layer = Node2D.new()
+	_particle_layer.name = "PixelParticles"
+	add_child(_particle_layer)
+
 func _reset_visuals(pack_id: String, results: Array) -> void:
 	_backdrop.modulate = Color(1, 1, 1, 0)
 	_panel.scale = Vector2(0.95, 0.95)
 	_panel.modulate = Color(1, 1, 1, 0)
 	_panel.position = Vector2.ZERO
+	if _shake_tween != null and _shake_tween.is_valid():
+		_shake_tween.kill()
 	_beam.modulate = Color(1, 1, 1, 0)
 	_beam.scale = Vector2(1, 1)
 	_crate.texture = ChargeIconScript.crate_texture(_tables, pack_id, 64)
@@ -147,6 +157,8 @@ func _reset_visuals(pack_id: String, results: Array) -> void:
 	for c in _items.get_children():
 		_items.remove_child(c)
 		c.queue_free()
+	for p in _particle_layer.get_children():
+		p.queue_free()
 	for id in _compact_results(results):
 		_items.add_child(_make_reward_card(str(id["id"]), int(id["count"])))
 
@@ -185,7 +197,7 @@ func _make_reward_card(charge_id: String, count: int) -> PanelContainer:
 	var icon := TextureRect.new()
 	icon.custom_minimum_size = Vector2(56, 56)
 	icon.texture = ChargeIconScript.texture_for(_tables, charge_id, 64)
-	icon.stretch_mode = TextureRect.STRETCH_NEAREST
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	box.add_child(icon)
 	var label := Label.new()
 	label.text = "%s x%d" % [str(Registry.explosive(_tables, charge_id).get("display_name", charge_id)), count]
@@ -252,12 +264,14 @@ func _reduced_motion_show(best: String) -> void:
 
 func _rare_hitstop() -> void:
 	var seconds: float = Registry.ui_crate_f(_tables, "rare_hitstop_seconds", 0.055)
+	_play("crate_smash")
+	_spawn_rare_particles()
+	_shake_panel()
 	if seconds <= 0.0:
 		return
 	Engine.time_scale = 0.08
 	var timer: SceneTreeTimer = get_tree().create_timer(seconds, true, false, true)
 	timer.timeout.connect(func() -> void: Engine.time_scale = 1.0)
-	_play("crate_smash")
 
 func _finish() -> void:
 	Engine.time_scale = 1.0
@@ -277,6 +291,60 @@ func _play(event: String) -> void:
 	var audio: Node = get_node_or_null("/root/Audio")
 	if audio != null and audio.has_method("play"):
 		audio.call("play", event)
+
+
+func _spawn_rare_particles() -> void:
+	if _motion <= 0.01 or _particle_layer == null:
+		return
+	var count: int = Registry.ui_crate_i(_tables, "particle_count_rare", 18)
+	if count <= 0:
+		return
+	var fx := GPUParticles2D.new()
+	fx.name = "RareBurst"
+	fx.amount = mini(count, 48)
+	fx.one_shot = true
+	fx.explosiveness = 1.0
+	fx.lifetime = 0.55
+	fx.texture = _pixel_particle_texture()
+	var mat := ParticleProcessMaterial.new()
+	mat.color = Color(1.0, 0.86, 0.28, 1.0)
+	mat.direction = Vector3(0, -1, 0)
+	mat.spread = 180.0
+	mat.initial_velocity_min = 80.0
+	mat.initial_velocity_max = 180.0
+	mat.gravity = Vector3(0, 220.0, 0)
+	mat.scale_min = 1.0
+	mat.scale_max = 2.4
+	fx.process_material = mat
+	var rect: Rect2 = get_viewport().get_visible_rect() if get_viewport() != null else Rect2(Vector2.ZERO, Vector2(720, 1280))
+	fx.position = rect.size * 0.5 + Vector2(0, -80)
+	_particle_layer.add_child(fx)
+	fx.emitting = true
+	var timer: SceneTreeTimer = get_tree().create_timer(fx.lifetime + 0.2, true, false, true)
+	timer.timeout.connect(fx.queue_free)
+
+
+func _shake_panel() -> void:
+	if _panel == null or _motion <= 0.01:
+		return
+	if _shake_tween != null and _shake_tween.is_valid():
+		_shake_tween.kill()
+	var amp := 7.0 * _motion
+	_shake_tween = create_tween()
+	_shake_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	for i in range(5):
+		var dir := -1.0 if i % 2 == 0 else 1.0
+		_shake_tween.tween_property(_panel, "position", Vector2(amp * dir, 0), 0.025)
+	_shake_tween.tween_property(_panel, "position", Vector2.ZERO, 0.04)
+
+
+func _pixel_particle_texture() -> Texture2D:
+	if _particle_texture != null:
+		return _particle_texture
+	var image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	image.fill(Color.WHITE)
+	_particle_texture = ImageTexture.create_from_image(image)
+	return _particle_texture
 
 func _caption_for(best: String) -> String:
 	if best == "rare":

@@ -17,6 +17,8 @@ signal enter_pressed(mine_id: String)
 signal closed
 
 const PIXEL_FONT := preload("res://art/fonts/PixelifySans.ttf")
+const _ChargeIcon := preload("res://scripts/ui/charge_icon.gd")
+const _PixelUi := preload("res://scripts/ui/pixel_ui.gd")
 
 @export var primary_button_normal: StyleBoxFlat
 @export var primary_button_hover: StyleBoxFlat
@@ -33,12 +35,16 @@ var _get_money: Callable
 var _is_unlocked: Callable
 var _buttons: Dictionary = {}  # mine_id -> Button
 var _tween: Tween = null
+var _text_scale: float = 1.0
+var _motion: float = 1.0
 
 
 func _ready() -> void:
 	visible = false
 	if _close_button != null and not _close_button.pressed.is_connected(close):
 		_close_button.pressed.connect(close)
+	_PixelUi.apply_button(_close_button, "secondary", 24)
+	_PixelUi.bind_button_feel(_close_button, Callable(self, "_motion_value"))
 
 
 ## Bind the data tables and callbacks: current money, and whether a mine id is unlocked.
@@ -50,11 +56,14 @@ func configure(tables: Dictionary, get_money_callback: Callable, is_unlocked_cal
 
 
 func open(motion: float = 1.0) -> void:
+	_motion = clampf(motion, 0.0, 1.0)
 	visible = true
 	refresh()
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	Audio.notify_user_gesture()
+	Audio.play("modal_open")
 	_animate_in(motion)
 
 
@@ -70,7 +79,13 @@ func close() -> void:
 		_panel.modulate = Color(1, 1, 1, 1)
 	if _backdrop != null:
 		_backdrop.modulate = Color(1, 1, 1, 1)
+	Audio.notify_user_gesture()
+	Audio.play("modal_close")
 	closed.emit()
+
+func set_text_scale(scale: float) -> void:
+	_text_scale = clampf(scale, 0.8, 2.0)
+	_apply_text_scale_to_tree(self)
 
 
 ## Re-run the button state pass (ENTER vs UNLOCK $cost, affordability) without rebuilding.
@@ -120,10 +135,13 @@ func _build_mine_entry(mine_id: String, m: Dictionary) -> VBoxContainer:
 	entry.alignment = BoxContainer.ALIGNMENT_CENTER
 	entry.add_theme_constant_override("separation", 6)
 
-	var icon := ColorRect.new()
+	var icon := TextureRect.new()
 	icon.name = "Icon"
 	icon.custom_minimum_size = Vector2(72, 72)
-	icon.color = Registry.mine_tile_tint(_tables, mine_id) * Color(0.55, 0.45, 0.32)
+	icon.texture = _ChargeIcon.crate_texture(_tables, "deep" if mine_id != Registry.default_mine_id(_tables) else "basic", 64)
+	icon.modulate = Registry.mine_tile_tint(_tables, mine_id)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	entry.add_child(icon)
 
 	var title := Label.new()
@@ -159,13 +177,8 @@ func _build_mine_entry(mine_id: String, m: Dictionary) -> VBoxContainer:
 	btn.name = "Action_%s" % mine_id
 	btn.text = "ENTER"
 	btn.custom_minimum_size = Vector2(0, 48)
-	btn.add_theme_font_override("font", PIXEL_FONT)
-	btn.add_theme_font_size_override("font_size", 22)
-	if primary_button_normal != null:
-		btn.add_theme_stylebox_override("normal", primary_button_normal)
-	if primary_button_hover != null:
-		btn.add_theme_stylebox_override("hover", primary_button_hover)
-		btn.add_theme_stylebox_override("pressed", primary_button_hover)
+	_PixelUi.apply_button(btn, "primary", 22)
+	_PixelUi.bind_button_feel(btn, Callable(self, "_motion_value"))
 	btn.pressed.connect(_on_action.bind(mine_id))
 	entry.add_child(btn)
 	_buttons[mine_id] = btn
@@ -206,3 +219,17 @@ func _animate_in(motion: float) -> void:
 	if _backdrop != null:
 		_tween.tween_property(_backdrop, "modulate", Color(1, 1, 1, 1), seconds) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+func _motion_value() -> float:
+	return _motion
+
+func _apply_text_scale_to_tree(root: Node) -> void:
+	if root is Label:
+		var label := root as Label
+		var base: int = int(label.get_meta("_base_font_size", label.get_theme_font_size("font_size")))
+		if base <= 0:
+			base = 18
+		label.set_meta("_base_font_size", base)
+		label.add_theme_font_size_override("font_size", maxi(8, int(round(float(base) * _text_scale))))
+	for child in root.get_children():
+		_apply_text_scale_to_tree(child)

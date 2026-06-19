@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "aseprite": {
+      "command": "env",
+      "args": [
+        "npm_config_cache=/private/tmp/npm-cache",
+        "npx",
+        "-y",
+        "@iborymagic/aseprite-mcp"
+      ]
+    }
+  }
+}

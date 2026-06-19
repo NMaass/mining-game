@@ -40,6 +40,7 @@ const MIN_AIRTIME_SEC := 0.12      # ~7 physics frames at 60 Hz
 const MIN_TRAVEL_PX := 8.0         # must have left the muzzle by at least this far
 var _min_airtime_sec: float = MIN_AIRTIME_SEC
 var _min_travel_px: float = MIN_TRAVEL_PX
+var _sticky_min_delay_sec: float = STICKY_MIN_DELAY
 
 ## The visual Sprite2D child (charge.tscn). Spin + squash-stretch are applied to THIS node ONLY,
 ## never the CollisionShape2D, so the circle collider stays intact (charge/physics tests unchanged).
@@ -51,14 +52,15 @@ const STRETCH_REF_SPEED := 600.0
 const STRETCH_MAX := 0.35
 ## Floor for a sticky charge's post-stick fuse: even a 0-fuse sticky reads as a brief stick, never
 ## an instant pop. A sticky charge with a longer authored fuse_seconds uses that instead.
-const STICKY_MIN_DELAY := 0.15
+const STICKY_MIN_DELAY := 0.15 # code-side floor; data-driven via setup() → balance.json
 
 ## Set up the charge with throw parameters.
 ## `min_airtime_sec` / `min_travel_px` are the motion gate (data-driven from balance.json); a
 ## value <= 0 keeps the code-side floor (the headless tests rely on the default). The spawn position
 ## is recorded so the gate can measure travel away from the muzzle.
 func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64,
-		min_airtime_sec: float = -1.0, min_travel_px: float = -1.0) -> void:
+		min_airtime_sec: float = -1.0, min_travel_px: float = -1.0,
+		sticky_min_delay_sec: float = -1.0) -> void:
 	_params = params
 	_block_pixel_size = block_pixel_size
 	position = spawn_pos
@@ -68,6 +70,8 @@ func setup(params: ThrowParams, spawn_pos: Vector2, block_pixel_size: int = 64,
 		_min_airtime_sec = min_airtime_sec
 	if min_travel_px > 0.0:
 		_min_travel_px = min_travel_px
+	if sticky_min_delay_sec > 0.0:
+		_sticky_min_delay_sec = sticky_min_delay_sec
 
 	# Physics material.
 	physics_material_override = PhysicsMaterial.new()
@@ -189,7 +193,7 @@ func on_impact(body: Node = null) -> void:
 		# armed HERE: the authored fuse_seconds, floored to STICKY_MIN_DELAY so it sticks for a beat
 		# instead of popping instantly. THIS is the fix for "the sticky bomb explodes instantly".
 		if _params.detonation_mode == "on_rest":
-			_fuse_timer = maxf(_params.fuse_seconds, STICKY_MIN_DELAY)
+			_fuse_timer = maxf(_params.fuse_seconds, _sticky_min_delay_sec)
 
 	# on_first_impact: detonate immediately on first terrain contact.
 	if _params.detonation_mode == "on_first_impact":

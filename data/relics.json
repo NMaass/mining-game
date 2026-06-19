@@ -1,6 +1,10 @@
 {
   "min_depth_cells": 300,
   "depth_span_cells": 120,
-  "relic_band_half_cells": 6,
+  "relic_band_half_cells": 5,
+  "relic_guaranteed_depth_cells": 420,
+  "relic_back_load_k": 4,
+  "glow_color": "#a64bff",
+  "glow_pulse_seconds": 1.6,
   "prestige_value": 1
 }

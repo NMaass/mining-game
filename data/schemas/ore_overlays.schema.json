@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "res://data/schemas/ore_overlays.schema.json",
+  "title": "Ore overlay generation layer",
+  "description": "Per-ore noise-field overlay stamped over the base depth-curve filler. Priority array (index 0 = rarest, evaluated first) + a per-ore field. frequency = cluster size, threshold_shallow/deep = depth-ramped rarity, depth_min = hard floor. See reports/continuous-gen-design.md §2.",
+  "type": "object",
+  "required": ["priority_order", "ores"],
+  "additionalProperties": false,
+  "properties": {
+    "priority_order": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "ores": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["block_id", "field_salt", "frequency", "depth_min", "threshold_shallow", "threshold_deep", "priority"],
+        "additionalProperties": false,
+        "properties": {
+          "block_id": { "type": "string" },
+          "field_salt": { "type": "integer" },
+          "frequency": { "type": "number", "exclusiveMinimum": 0 },
+          "depth_min": { "type": "integer", "minimum": 0 },
+          "threshold_shallow": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+          "threshold_deep": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+          "priority": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

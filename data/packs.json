@@ -3,7 +3,7 @@
     "display_name": "Rusty Crate",
     "price": 50,
     "charge_count": 5,
-    "pity_every": 6,
+    "pity_every": 5,
     "weights": {
       "dynamite": 70,
       "charge_sticky": 25,

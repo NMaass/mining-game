@@ -17,6 +17,8 @@ signal accepted
 ## Emitted when the player presses "Keep Digging".
 signal declined
 
+const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
+
 @onready var _panel: PanelContainer = get_node_or_null("Panel")
 @onready var _backdrop: Control = get_node_or_null("Backdrop")
 @onready var _accept_button: Button = get_node_or_null("Panel/Box/AcceptButton")
@@ -26,11 +28,17 @@ signal declined
 var _tables: Dictionary = {}
 ## Live tween handle so a re-show kills a prior pop-in (no compounding scale / stuck alpha).
 var _tween: Tween = null
+var _motion: float = 1.0
 
 
 func _ready() -> void:
 	visible = false
 	_connect_once()
+	PIXEL_UI_SCRIPT.apply_panel(_panel)
+	PIXEL_UI_SCRIPT.apply_button(_accept_button, "primary", 20)
+	PIXEL_UI_SCRIPT.apply_button(_decline_button, "secondary", 20)
+	PIXEL_UI_SCRIPT.bind_button_feel(_accept_button, Callable(self, "_motion_value"))
+	PIXEL_UI_SCRIPT.bind_button_feel(_decline_button, Callable(self, "_motion_value"))
 
 
 ## Provide the data tables (the scale-in duration is a /data tunable). Idempotent.
@@ -58,10 +66,13 @@ func _connect_once() -> void:
 ## ui_panel_in_seconds, with a dimmed backdrop. `visible` is set TRUE SYNCHRONOUSLY first so the
 ## smoke test reading offer.visible right after stays green. At motion ~0 it snaps (no tween).
 func show_offer(motion: float = 1.0) -> void:
+	_motion = clampf(motion, 0.0, 1.0)
 	visible = true
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	Audio.notify_user_gesture()
+	Audio.play("modal_open")
 	_animate_in(motion)
 
 
@@ -77,6 +88,8 @@ func hide_offer() -> void:
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = false
+	Audio.notify_user_gesture()
+	Audio.play("modal_close")
 
 
 ## Pop the Panel into view (the backdrop fades in alongside). Pure presentation; visible is true.
@@ -115,3 +128,7 @@ func _on_accept() -> void:
 func _on_decline() -> void:
 	hide_offer()
 	declined.emit()
+
+
+func _motion_value() -> float:
+	return _motion

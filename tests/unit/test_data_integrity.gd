@@ -68,16 +68,17 @@ func test_shipped_data_passes_depth_reward() -> void:
 	).is_empty()
 
 func test_validator_rejects_non_rising_expected_value() -> void:
-	# AC-5.5.2: a cap table NO RICHER than the surface in EV (but still-rising gem prob, to
-	# isolate the EV branch). cap = {ore_gem:1, rock:99} → gem prob rises (gem absent at surface),
-	# but EV 2.40 < surface EV 1.90? No — make EV strictly LOWER: cap = {ore_gem:1, dirt:99} → EV
-	# = 240/100 = 2.4 — still higher. Instead drop all value: cap = {ore_gem:1, rock:9999} keeps
-	# gem prob tiny-rising while EV ~0.024 < 1.90.
+	# AC-5.5.2: if both filler and overlay odds are flattened, the combined EV no longer
+	# strictly rises with depth. This mutates the real reward layer (ore_overlays), not the
+	# old filler-only curve, so it verifies the continuous-gen invariant.
 	var t := _load_real_tables()
-	(t["depth_bands"])["cap_weights"] = {"ore_gem": 1, "rock": 9999}
+	(t["depth_bands"])["cap_weights"] = (t["depth_bands"]["surface_weights"] as Dictionary).duplicate(true)
+	for oid in (t["ore_overlays"]["ores"] as Dictionary).keys():
+		var ore: Dictionary = t["ore_overlays"]["ores"][oid]
+		ore["threshold_deep"] = ore["threshold_shallow"]
 	var errs := _ac552_errors(t)
 	assert_array(errs).override_failure_message(
-		"validator must reject a cap table with non-rising expected value (AC-5.5.2)"
+		"validator must reject a non-rising combined expected value (AC-5.5.2)"
 	).is_not_empty()
 	# The EV branch specifically must be the one that fired.
 	var ev_hit := false
@@ -87,14 +88,14 @@ func test_validator_rejects_non_rising_expected_value() -> void:
 	assert_bool(ev_hit).override_failure_message(str(errs)).is_true()
 
 func test_validator_rejects_non_rising_gem_probability() -> void:
-	# AC-5.5.2: a cap table with NO gem at depth (gem prob doesn't rise) but rising EV (rich
-	# copper), to isolate the gem branch. cap = {ore_copper:80, rock:20} → EV 9.6 > surface 1.9,
-	# but gem (ore_gem) prob stays 0 == surface 0.
+	# AC-5.5.2: flatten only the max-value ore (diamond) so rare-gem probability no
+	# longer strictly rises, while the rest of the overlay can still make EV richer.
 	var t := _load_real_tables()
-	(t["depth_bands"])["cap_weights"] = {"ore_copper": 80, "rock": 20}
+	var diamond: Dictionary = t["ore_overlays"]["ores"]["diamond"]
+	diamond["threshold_deep"] = diamond["threshold_shallow"]
 	var errs := _ac552_errors(t)
 	assert_array(errs).override_failure_message(
-		"validator must reject a cap table with non-rising gem probability (AC-5.5.2)"
+		"validator must reject non-rising rare-gem probability (AC-5.5.2)"
 	).is_not_empty()
 	var gem_hit := false
 	for e in errs:
@@ -270,6 +271,24 @@ func test_validator_requires_starting_money() -> void:
 	var t := _load_real_tables()
 	(t["balance"] as Dictionary).erase("starting_money")
 	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_requires_ui_selector_tunables() -> void:
+	# AC-5.8.5 / AC-5.10.1: selector dimensions and motion timings are /data and validated.
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("ui_selector")
+	assert_array(Validator.validate(t)).is_not_empty()
+	var t2 := _load_real_tables()
+	(t2["balance"]["ui_selector"])["slot_width_px"] = 32
+	assert_array(Validator.validate(t2)).is_not_empty()
+
+func test_validator_requires_ui_crate_tunables() -> void:
+	# AC-5.10.1 / AC-5.13.1: crate reveal timing, hit-stop, and particle caps stay data-driven.
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("ui_crate")
+	assert_array(Validator.validate(t)).is_not_empty()
+	var t2 := _load_real_tables()
+	(t2["balance"]["ui_crate"])["rare_hitstop_seconds"] = 0.5
+	assert_array(Validator.validate(t2)).is_not_empty()
 
 # ── on_rest charge motion gate (the "sticky bomb explodes instantly" fix; AC-5.4.2) ──────────
 
@@ -986,6 +1005,24 @@ func test_validator_rejects_negative_recoil_px() -> void:
 		"validator must reject a negative feel.recoil_px"
 	).is_not_empty()
 
+func test_validator_rejects_aim_march_aim_mult_below_one() -> void:
+	# v0.5 aim-indicator pass: the march SPEEDS UP while aiming, so the multiplier must be >= 1.
+	# A value < 1 would slow the march while turning — reject it.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["aim_march_aim_mult"] = 0.7
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.aim_march_aim_mult < 1"
+	).is_not_empty()
+
+func test_validator_rejects_zero_aim_march_ease_rate() -> void:
+	# v0.5 aim-indicator pass: the speed-up eases in/out at aim_march_ease_rate per second. A
+	# 0/negative rate has no ease budget — reject it.
+	var t := _load_real_tables()
+	(t["balance"]["feel"])["aim_march_ease_rate"] = 0.0
+	assert_array(_feel_errors(t)).override_failure_message(
+		"validator must reject feel.aim_march_ease_rate == 0"
+	).is_not_empty()
+
 
 # ── Elevator hold-to-move ramp (balance.elevator) ─────────────────────────────
 # The continuous-hold ramp constants (slow start → capped max) are /data tunables; _check_elevator
@@ -1166,4 +1203,12 @@ func test_validator_rejects_zero_combo_step_seconds() -> void:
 	(t["audio"]["combo"])["step_seconds"] = 0.0
 	assert_array(_audio_errors(t)).override_failure_message(
 		"validator must reject audio.combo.step_seconds == 0"
+	).is_not_empty()
+
+func test_validator_requires_music_tracks() -> void:
+	# AC-5.13.2: menu/mining/deep/relic/shop placeholder music specs are data-driven.
+	var t := _load_real_tables()
+	(t["audio"]["music"] as Dictionary).erase("music_shop")
+	assert_array(_audio_errors(t)).override_failure_message(
+		"validator must reject an audio table missing the music_shop placeholder loop"
 	).is_not_empty()

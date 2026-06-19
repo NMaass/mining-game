@@ -15,13 +15,21 @@
     "palette_index": 3,
     "ore": null
   },
+  "coal": {
+    "display_name": "Coal",
+    "hardness": 1,
+    "max_hp": 14,
+    "diggable": true,
+    "palette_index": 7,
+    "ore": { "value": 3 }
+  },
   "rock": {
     "display_name": "Rock",
     "hardness": 2,
     "max_hp": 60,
     "diggable": true,
     "palette_index": 5,
-    "ore": null
+    "ore": { "value": 5 }
   },
   "hard_rock": {
     "display_name": "Hard Rock",
@@ -37,7 +45,7 @@
     "max_hp": 70,
     "diggable": true,
     "palette_index": 9,
-    "ore": { "value": 12 }
+    "ore": { "value": 10 }
   },
   "ore_silver": {
     "display_name": "Silver Ore",
@@ -45,7 +53,7 @@
     "max_hp": 100,
     "diggable": true,
     "palette_index": 10,
-    "ore": { "value": 35 }
+    "ore": { "value": 20 }
   },
   "ore_gold": {
     "display_name": "Gold Ore",
@@ -62,5 +70,21 @@
     "diggable": true,
     "palette_index": 12,
     "ore": { "value": 240 }
+  },
+  "diamond": {
+    "display_name": "Diamond",
+    "hardness": 5,
+    "max_hp": 200,
+    "diggable": true,
+    "palette_index": 13,
+    "ore": { "value": 1500 }
+  },
+  "relic": {
+    "display_name": "Relic Core",
+    "hardness": 5,
+    "max_hp": 200,
+    "diggable": true,
+    "palette_index": 14,
+    "ore": null
   }
 }

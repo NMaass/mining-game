@@ -320,20 +320,28 @@ func recoil(angle: float, px: float) -> void:
 		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
 
 
+## The world-space X the platform deck + player + muzzle center on: the TRUE center of the
+## shaft clearance band (shaft_left + shaft_width/2), NOT the mine-width midpoint. With an even
+## mine width and an odd shaft width these differ by half a cell; centering on the shaft keeps the
+## 3-wide deck, the player, the launch muzzle, and the 9-wide dotted guide all sharing one center
+## line (the standing block's center).
 func _shaft_x_center() -> float:
-	return float(_mine_width * _cell_size) / 2.0
+	return (float(_shaft_left) + float(_shaft_width) * 0.5) * float(_cell_size)
 
 
 ## World-space muzzle: where the predicted arc AND live charges launch from (AC-5.7.1).
 ## Reads the AUTHORED `Body/Muzzle` marker so the launch point is data (the scene), not a
 ## code constant — and it is anchored to the platform TARGET (stable; aiming happens at
-## rest), offset by the marker's local position. Falls back to half a cell above the target
-## if the scene has no marker (headless bare instance).
+## rest), offset by the marker's local position. The marker sits at the CENTER of the block
+## the character stands on (the platform target is that cell's top edge → +cell_size/2 = the
+## standing block's middle / the player's feet), so charges originate at the standing block,
+## not one cell below. Falls back to that same half-cell offset if the scene has no marker
+## (headless bare instance).
 func muzzle_position() -> Vector2:
 	var marker: Node2D = get_node_or_null("Body/Muzzle")
-	# AC-5.3.9: the muzzle must be BELOW the platform body so a default downward
-	# throw enters the mine instead of resting on the launcher/platform line.
-	var offset: Vector2 = marker.position if marker != null else Vector2(0.0, float(_cell_size))
+	# Half a cell below the platform target = the center of the standing block (the deck cell),
+	# still strictly below the platform line so a default downward throw enters the shaft (AC-5.3.9).
+	var offset: Vector2 = marker.position if marker != null else Vector2(0.0, float(_cell_size) * 0.5)
 	return platform_target_position() + offset
 
 
@@ -480,9 +488,13 @@ func _configure_body_geometry() -> void:
 		player.position = Vector2(0.0, -height_px - tex_size.y * 0.5)
 	var marker := get_node_or_null("Body/Muzzle") as Marker2D
 	if marker != null:
-		# AC-5.3.9: launch point is one cell below the platform deck so the default
-		# downward throw enters the cleared shaft, not the deck or row 0.
-		marker.position = Vector2(0.0, float(_cell_size))
+		# Launch point is the CENTER of the block the character stands on — the platform
+		# target row is that cell's TOP edge, so +cell_size/2 puts the muzzle at the standing
+		# block's middle (the player's feet / deck level), NOT one cell below. The arc AND live
+		# charge both originate here. It is still strictly BELOW the platform TARGET line (by half
+		# a cell), so a default straight-down throw enters the cleared shaft (AC-5.3.9) and never
+		# rests on the launcher/platform line.
+		marker.position = Vector2(0.0, float(_cell_size) * 0.5)
 
 var shaft_left_cell: int:
 	get:

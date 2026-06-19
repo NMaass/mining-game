@@ -1,6 +1,6 @@
 {
-  "min_level": "DEBUG",
+  "min_level": "INFO",
   "log_file": "user://mining_game.log",
   "max_file_kb": 256,
-  "mirror_to_console": true
+  "mirror_to_console": false
 }

@@ -32,14 +32,23 @@ var _shaft_width: int
 var _chunk_height: int
 var _mine_hardness_mult: float
 
-## The absolute cell holding this mine's relic, or (-1,-1) if none. Pure fn of
+## The top-left anchor cell of this mine's 2×2 relic, or (-1,-1) if none. Pure fn of
 ## (mine_seed, relic config); resolved once at construction.
 var _relic_cell: Vector2i
+## The 4 absolute cells of the relic's 2×2 footprint (the anchor + the 3 other cells),
+## resolved once at construction from the SAME BlockGen.relic_anchor the gen uses (so the
+## latch never targets cells gen didn't stamp `relic`). Empty if there is no relic.
+var _relic_footprint: Array[Vector2i] = []
+## Cells of the footprint still un-broken; the relic is collected when it reaches 0 (the
+## 4th/last relic cell excavated). Counting to N preserves the idempotent latch.
+var _relic_cells_remaining: int = 0
 ## Guards against re-emitting relic_collected (idempotent; never recycles).
 var _relic_collected: bool = false
 
 ## Per-chunk data: chunk_y -> { "hp": PackedInt32Array, "ids": Array }
 var _chunks: Dictionary = {}
+var _newly_loaded: Array = []
+var _just_unloaded: Array = []
 
 func _init(tables: Dictionary, run_seed: int, mine_hardness_mult: float = 1.0) -> void:
 	_tables = tables
@@ -49,7 +58,11 @@ func _init(tables: Dictionary, run_seed: int, mine_hardness_mult: float = 1.0) -
 	_mine_height = Registry.mine_height_cells(tables)
 	_shaft_width = Registry.shaft_width(tables)
 	_chunk_height = Registry.chunk_height(tables)
-	_relic_cell = BlockGen.relic_cell(tables, run_seed)
+	_relic_cell = BlockGen.relic_anchor(tables, run_seed)
+	var fp: Array = BlockGen.relic_footprint(tables, run_seed)
+	for c in fp:
+		_relic_footprint.append(c)
+	_relic_cells_remaining = _relic_footprint.size()
 
 ## Total bounded mine width in cells.
 var mine_width: int:
@@ -76,7 +89,7 @@ var mine_hardness_mult: float:
 	get:
 		return _mine_hardness_mult
 
-## The absolute relic cell for this mine, or (-1,-1) if none.
+## The relic's top-left anchor cell for this mine, or (-1,-1) if none (2×2 footprint).
 var relic_cell: Vector2i:
 	get:
 		return _relic_cell
@@ -104,13 +117,19 @@ func ensure_chunk(chunk_y: int) -> void:
 	var ids: Array = []
 	ids.resize(size)
 
+	# Build the whole chunk in one pass: one FastNoiseLite allocation + one weight-table
+	# lookup per row instead of one per cell (PERF-01). generate_region is the same pure
+	# fn as block_at — same seed + cell → same output (test_determinism_fresh_region_matches_cell_calls).
+	var region: Array = BlockGen.generate_region(
+		_tables, _run_seed, 0, base_y, _mine_width, _chunk_height
+	)
 	for ly in range(_chunk_height):
+		var world_y: int = base_y + ly
 		for lx in range(_mine_width):
-			var world_y: int = base_y + ly
 			var idx: int = ly * _mine_width + lx
 			var block_id: String = "air"
 			if _mine_height <= 0 or world_y < _mine_height:
-				block_id = BlockGen.block_at(_tables, _run_seed, lx, world_y)
+				block_id = region[ly][lx]
 			ids[idx] = block_id
 			# AC-5.2.1: HP scaled by depth + per-mine hardness, applied once here.
 			hp[idx] = Registry.scaled_block_hp(_tables, block_id, world_y, _mine_hardness_mult)
@@ -138,12 +157,21 @@ func loaded_chunk_count() -> int:
 func loaded_chunks() -> Array:
 	return _chunks.keys()
 
+## Chunks loaded by the most recent update_window call (for incremental rendering).
+func newly_loaded_chunks() -> Array:
+	return _newly_loaded
+
+## Chunks unloaded by the most recent update_window call (for incremental erasure).
+func just_unloaded_chunks() -> Array:
+	return _just_unloaded
+
 ## Manage the chunk window: load chunks in [center - half, center + half],
 ## unload everything outside. AC-5.1.2: keeps resident count bounded.
 func update_window(center_chunk_y: int, half_size: int) -> void:
 	var lo: int = center_chunk_y - half_size
 	var hi: int = center_chunk_y + half_size
 	var max_chunk: int = cell_to_chunk(maxi(0, _mine_height - 1)) if _mine_height > 0 else hi
+	var before: Array = _chunks.keys()
 	# Load chunks in range.
 	for cy in range(maxi(0, lo), mini(hi, max_chunk) + 1):
 		ensure_chunk(cy)
@@ -154,6 +182,12 @@ func update_window(center_chunk_y: int, half_size: int) -> void:
 			to_unload.append(cy)
 	for cy in to_unload:
 		unload_chunk(cy)
+	# Track diff for incremental rendering (PERF-02).
+	_newly_loaded = []
+	_just_unloaded = to_unload
+	for cy in _chunks.keys():
+		if not before.has(cy):
+			_newly_loaded.append(cy)
 
 # ── Cell access ───────────────────────────────────────────────────────────
 
@@ -243,12 +277,19 @@ func damage(cell_x: int, cell_y: int, amount: int) -> int:
 		_break_cell(cy, idx, Vector2i(cell_x, cell_y))
 	return remaining
 
-## Internal: clear a cell to air and, if it was the relic, fire relic_collected once.
+## Internal: clear a cell to air and, if it was a relic footprint cell, count it down;
+## when the LAST (4th) relic cell breaks, fire relic_collected EXACTLY ONCE (AC-5.6.2).
+## Excavating the whole 2×2 reads as "dig out the relic" and leaves no orphan solid cells.
+## The signal carries the anchor (top-left), matching the pre-2×2 contract callers expect.
 func _break_cell(chunk_y: int, idx: int, cell: Vector2i) -> void:
 	_chunks[chunk_y]["ids"][idx] = "air"
-	if cell == _relic_cell and not _relic_collected:
-		_relic_collected = true
-		relic_collected.emit(cell)
+	if _relic_collected:
+		return
+	if _relic_footprint.has(cell):
+		_relic_cells_remaining -= 1
+		if _relic_cells_remaining <= 0:
+			_relic_collected = true
+			relic_collected.emit(_relic_cell)
 
 # ── Blast integration ─────────────────────────────────────────────────────
 

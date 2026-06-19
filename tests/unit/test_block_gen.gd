@@ -204,10 +204,13 @@ func test_relic_placement_is_deterministic() -> void:
 	var cell: Vector2i = BlockGen.relic_cell(_tables, seed_val)
 	for i in range(100):
 		assert_vector(BlockGen.relic_cell(_tables, seed_val)).is_equal(cell)
-	# relic_at agrees with relic_cell, and is true at exactly that one cell.
+	# relic_at agrees with relic_cell, and is true for the 2x2 footprint.
 	assert_bool(BlockGen.relic_at(_tables, seed_val, cell)).is_true()
-	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(1, 0))).is_false()
-	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(0, 1))).is_false()
+	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(1, 0))).is_true()
+	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(0, 1))).is_true()
+	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(1, 1))).is_true()
+	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(2, 0))).is_false()
+	assert_bool(BlockGen.relic_at(_tables, seed_val, cell + Vector2i(0, 2))).is_false()
 
 func test_relic_only_below_min_depth() -> void:
 	# AC-5.6.1: the relic is located at/below the configured minimum depth, and never
@@ -232,15 +235,15 @@ func test_relic_below_min_depth_for_many_seeds() -> void:
 	# AC-5.6.1: the min-depth invariant holds for every mine seed, not just the shipped one.
 	var relics: Dictionary = _tables.get("relics", {})
 	var min_depth: int = int(relics.get("min_depth_cells", 0))
-	var span: int = int(relics.get("depth_span_cells", 1))
+	var guaranteed_depth: int = int(relics.get("relic_guaranteed_depth_cells", 1))
 	var width: int = Registry.mine_width_cells(_tables)
 	for seed_val in [0, 1, 7, 42, 1337, 9999, 123456, 999999983]:
 		var cell: Vector2i = BlockGen.relic_cell(_tables, seed_val)
 		assert_int(cell.y).override_failure_message(
 			"seed %d placed relic at depth %d, above min %d" % [seed_val, cell.y, min_depth]
 		).is_greater_equal(min_depth)
-		assert_int(cell.y).is_less(min_depth + span)
-		assert_int(cell.x).is_between(0, width - 1)
+		assert_int(cell.y).is_less(guaranteed_depth)
+		assert_int(cell.x).is_between(0, width - 2)
 
 func test_relic_varies_with_seed() -> void:
 	# AC-5.6.1: different mine seeds generally place the relic differently (it is keyed
@@ -256,8 +259,8 @@ func test_relic_varies_with_seed() -> void:
 	).is_greater(1)
 
 func test_relic_column_in_center_band_for_many_seeds() -> void:
-	# AC-5.6.1 (UNIT MAPGEN): the relic column is confined to |col - center| <= half (a 13-wide
-	# band at half=6). Holds for EVERY seed, not just the shipped one, so the relic always sits
+	# AC-5.6.1 (UNIT MAPGEN): the relic column is confined to |col - center| <= half (an 11-wide
+	# band at half=5). Holds for EVERY seed, not just the shipped one, so the relic always sits
 	# on/near the descent corridor in the infinite shaft.
 	var width: int = Registry.mine_width_cells(_tables)
 	var center: int = int(width / 2)
@@ -298,24 +301,49 @@ func _assert_golden(golden_path: String, region: Array) -> void:
 func test_golden_gen_surface() -> void:
 	# Shallow region: dirt/copper/silver dominated (the surface anchor weights).
 	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
 	_assert_golden("res://tests/golden/gen_surface.txt",
-		BlockGen.generate_region(_tables, seed_val, 0, 0, 7, 16))
+		BlockGen.generate_region(_tables, seed_val, 0, 0, width, 16))
+
+func test_golden_gen_mid() -> void:
+	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
+	_assert_golden("res://tests/golden/gen_mid.txt",
+		BlockGen.generate_region(_tables, seed_val, 0, 5000, width, 16))
 
 func test_golden_gen_deep() -> void:
 	# UNIT MAPGEN: pin a region BELOW the cap depth so the frozen cap_weights are golden-locked.
 	# Proves the infinite descent is deterministic far from the surface (hard_rock/gold/gem rich).
 	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
 	var cap: int = Registry.cap_depth_cells(_tables)
 	_assert_golden("res://tests/golden/gen_deep.txt",
-		BlockGen.generate_region(_tables, seed_val, 0, cap + 50, 7, 16))
+		BlockGen.generate_region(_tables, seed_val, 0, cap + 50, width, 16))
 
 func test_golden_gen_cap_transition() -> void:
 	# UNIT MAPGEN: pin a region straddling cap_depth_cells so the lerp→clamp boundary is locked
 	# (catches an off-by-one in t = clamp((y-surface)/(cap-surface), 0, 1)).
 	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
 	var cap: int = Registry.cap_depth_cells(_tables)
 	_assert_golden("res://tests/golden/gen_cap_transition.txt",
-		BlockGen.generate_region(_tables, seed_val, 0, cap - 8, 7, 16))
+		BlockGen.generate_region(_tables, seed_val, 0, cap - 8, width, 16))
+
+func test_golden_gen_ore_deep() -> void:
+	var seed_val: int = Registry.run_seed(_tables)
+	var width: int = Registry.mine_width_cells(_tables)
+	_assert_golden("res://tests/golden/gen_ore_deep.txt",
+		BlockGen.generate_region(_tables, seed_val, 0, 8000, width, 16))
+
+func test_golden_relic_anchor() -> void:
+	var seed_val: int = Registry.run_seed(_tables)
+	var anchor: Vector2i = BlockGen.relic_anchor(_tables, seed_val)
+	var footprint: Array = BlockGen.relic_footprint(_tables, seed_val)
+	var lines := PackedStringArray([
+		"anchor:%d,%d" % [anchor.x, anchor.y],
+		"footprint:%s" % _serialize_cells(footprint),
+	])
+	_assert_text_golden("res://tests/golden/relic_anchor.txt", "\n".join(lines) + "\n")
 
 # ── generate_region shape & validity ─────────────────────────────────────────
 
@@ -364,3 +392,20 @@ func _serialize_region(region: Array) -> String:
 			cells.append(str(cell))
 		lines.append(",".join(cells))
 	return "\n".join(lines) + "\n"
+
+func _assert_text_golden(golden_path: String, text: String) -> void:
+	assert_bool(FileAccess.file_exists(golden_path)).override_failure_message(
+		"Missing golden file: %s — commit the pinned golden; tests never self-write it." % golden_path
+	).is_true()
+	var f := FileAccess.open(golden_path, FileAccess.READ)
+	var expected: String = f.get_as_text()
+	f.close()
+	assert_str(text).override_failure_message(
+		"Golden %s mismatch — generation has drifted!" % golden_path
+	).is_equal(expected)
+
+func _serialize_cells(cells: Array) -> String:
+	var parts := PackedStringArray()
+	for c in cells:
+		parts.append("%d,%d" % [c.x, c.y])
+	return ";".join(parts)

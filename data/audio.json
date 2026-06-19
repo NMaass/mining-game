@@ -9,7 +9,22 @@
     "relic_found": { "freq": 523.0, "dur": 0.45, "noise": 0.0, "sweep": 1047.0, "pitch_jitter": 0.0 },
     "prestige_banked": { "freq": 740.0, "dur": 0.25, "noise": 0.0, "sweep": 1109.0, "pitch_jitter": 0.0 },
     "descend": { "freq": 80.0, "dur": 0.18, "noise": 0.45, "sweep": 55.0, "pitch_jitter": 0.05 },
-    "throw": { "freq": 300.0, "dur": 0.12, "noise": 0.85, "sweep": 900.0, "pitch_jitter": 0.1 }
+    "throw": { "freq": 300.0, "dur": 0.12, "noise": 0.85, "sweep": 900.0, "pitch_jitter": 0.1 },
+    "crate_drop": { "freq": 95.0, "dur": 0.18, "noise": 0.55, "sweep": 52.0, "pitch_jitter": 0.06 },
+    "crate_creak": { "freq": 260.0, "dur": 0.22, "noise": 0.35, "sweep": 180.0, "pitch_jitter": 0.08 },
+    "crate_smash": { "freq": 120.0, "dur": 0.24, "noise": 0.9, "sweep": 40.0, "pitch_jitter": 0.1 },
+    "rare_reveal_sting": { "freq": 523.0, "dur": 0.55, "noise": 0.05, "sweep": 1568.0, "pitch_jitter": 0.0 },
+    "charge_select": { "freq": 780.0, "dur": 0.08, "noise": 0.0, "sweep": 980.0, "pitch_jitter": 0.04 },
+    "button_hover": { "freq": 520.0, "dur": 0.035, "noise": 0.0, "sweep": 620.0, "pitch_jitter": 0.03 },
+    "button_press": { "freq": 300.0, "dur": 0.055, "noise": 0.08, "sweep": 220.0, "pitch_jitter": 0.05 },
+    "button_disabled": { "freq": 160.0, "dur": 0.09, "noise": 0.25, "sweep": 120.0, "pitch_jitter": 0.04 },
+    "modal_open": { "freq": 440.0, "dur": 0.14, "noise": 0.0, "sweep": 660.0, "pitch_jitter": 0.02 },
+    "modal_close": { "freq": 360.0, "dur": 0.11, "noise": 0.0, "sweep": 240.0, "pitch_jitter": 0.02 },
+    "insufficient_funds": { "freq": 110.0, "dur": 0.16, "noise": 0.4, "sweep": 85.0, "pitch_jitter": 0.04 },
+    "coin_fly": { "freq": 1320.0, "dur": 0.045, "noise": 0.0, "sweep": 1760.0, "pitch_jitter": 0.06 },
+    "prestige_bank": { "freq": 740.0, "dur": 0.32, "noise": 0.0, "sweep": 1480.0, "pitch_jitter": 0.0 },
+    "run_end_jingle": { "freq": 660.0, "dur": 0.5, "noise": 0.0, "sweep": 990.0, "pitch_jitter": 0.0 },
+    "upgrade_purchase": { "freq": 600.0, "dur": 0.22, "noise": 0.02, "sweep": 900.0, "pitch_jitter": 0.02 }
   },
   "combo": {
     "max_voices": 6,
@@ -22,5 +37,37 @@
       { "freq": 180.0, "dur": 0.08, "noise": 0.4, "sweep": 60.0, "pitch_jitter": 0.1 },
       { "freq": 90.0, "dur": 0.3, "noise": 0.95, "sweep": 40.0, "pitch_jitter": 0.12 }
     ]
+  },
+  "music": {
+    "music_menu": {
+      "bpm": 108,
+      "step_beats": 0.5,
+      "volume": 0.16,
+      "notes": [220, 0, 277.18, 0, 329.63, 0, 277.18, 0, 196, 0, 246.94, 0, 293.66, 0, 246.94, 0]
+    },
+    "music_mining": {
+      "bpm": 126,
+      "step_beats": 0.5,
+      "volume": 0.13,
+      "notes": [110, 164.81, 220, 164.81, 123.47, 185, 246.94, 185, 98, 146.83, 196, 146.83, 123.47, 185, 246.94, 185]
+    },
+    "music_deep": {
+      "bpm": 118,
+      "step_beats": 0.5,
+      "volume": 0.14,
+      "notes": [82.41, 123.47, 164.81, 123.47, 92.5, 138.59, 185, 138.59, 73.42, 110, 146.83, 110, 92.5, 138.59, 185, 138.59]
+    },
+    "music_relic": {
+      "bpm": 96,
+      "step_beats": 0.5,
+      "volume": 0.18,
+      "notes": [261.63, 329.63, 392, 523.25, 659.25, 783.99, 1046.5, 0]
+    },
+    "music_shop": {
+      "bpm": 104,
+      "step_beats": 0.5,
+      "volume": 0.13,
+      "notes": [196, 246.94, 293.66, 246.94, 220, 277.18, 329.63, 277.18, 196, 246.94, 293.66, 369.99, 329.63, 293.66, 246.94, 220]
+    }
   }
 }

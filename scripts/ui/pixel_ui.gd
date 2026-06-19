@@ -84,7 +84,8 @@ static func apply_panel(panel: PanelContainer, kind: String = "panel") -> void:
 	panel.add_theme_stylebox_override("panel", sb)
 
 static func bind_button_feel(button: Button, motion_getter: Callable = Callable()) -> void:
-	if button == null or bool(button.get_meta("_pixel_feel_bound", false)):
+	var already_bound := button != null and button.has_meta("_pixel_feel_bound") and bool(button.get_meta("_pixel_feel_bound"))
+	if button == null or already_bound:
 		return
 	button.set_meta("_pixel_feel_bound", true)
 	button.button_down.connect(func() -> void:
@@ -116,7 +117,7 @@ static func _press_scale(button: Button, motion: float, down: bool) -> void:
 	if motion <= 0.01:
 		_reset(button)
 		return
-	var existing: Variant = button.get_meta("_pixel_feel_tween", null)
+	var existing: Variant = button.get_meta("_pixel_feel_tween") if button.has_meta("_pixel_feel_tween") else null
 	if existing is Tween and (existing as Tween).is_valid():
 		(existing as Tween).kill()
 	button.pivot_offset = button.size * 0.5
@@ -127,7 +128,7 @@ static func _press_scale(button: Button, motion: float, down: bool) -> void:
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 static func _reset(button: Button) -> void:
-	var existing: Variant = button.get_meta("_pixel_feel_tween", null)
+	var existing: Variant = button.get_meta("_pixel_feel_tween") if button.has_meta("_pixel_feel_tween") else null
 	if existing is Tween and (existing as Tween).is_valid():
 		(existing as Tween).kill()
 	button.scale = Vector2.ONE
@@ -144,4 +145,6 @@ static func _play(event: String) -> void:
 		return
 	var audio: Node = tree.root.get_node_or_null("Audio")
 	if audio != null and audio.has_method("play"):
+		if audio.has_method("notify_user_gesture"):
+			audio.call("notify_user_gesture")
 		audio.call("play", event)

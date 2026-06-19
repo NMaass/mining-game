@@ -1,6 +1,6 @@
 extends Node
 ## Logger — the diagnostics autoload (UNIT INFRA). A leveled logger that writes to a
-## `user://` rotating log file AND mirrors to the console, plus a process-wide error handler
+## `user://` rotating log file and can mirror to the console, plus a process-wide error handler
 ## that records `push_error`/`push_warning` + a script stack so a crash leaves evidence on
 ## disk instead of vanishing with the process.
 ##
@@ -34,18 +34,17 @@ enum Level { DEBUG = 0, INFO = 1, WARN = 2, ERROR = 3, OFF = 4 }
 ## Canonical short tags for each level, used in the formatted line. Index by the enum value.
 const LEVEL_TAGS: Array[String] = ["DEBUG", "INFO", "WARN", "ERROR", "OFF"]
 
-## Fallback config — used only if data/logging.json is missing/unparseable (so a data hiccup
-## can't disable diagnostics entirely). The shipped logging.json mirrors these and is the real
-## contract (the data gate enforces it).
+## Fallback config — used only if data/logging.json is missing/unparseable. It keeps lifecycle,
+## warning, and error breadcrumbs without shipping DEBUG verbosity or console mirroring by default.
 const FALLBACK_CONFIG := {
-	"min_level": "DEBUG",
+	"min_level": "INFO",
 	"log_file": "user://mining_game.log",
 	"max_file_kb": 256,
-	"mirror_to_console": true,
+	"mirror_to_console": false,
 }
 
 # ── Live (side-effecting) state ────────────────────────────────────────────────
-var _threshold: int = Level.DEBUG
+var _threshold: int = Level.INFO
 var _log_path: String = FALLBACK_CONFIG["log_file"]
 var _max_bytes: int = int(FALLBACK_CONFIG["max_file_kb"]) * 1024
 var _mirror: bool = bool(FALLBACK_CONFIG["mirror_to_console"])

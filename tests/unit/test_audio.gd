@@ -39,11 +39,9 @@ func test_sfx_and_music_route_to_master() -> void:
 # ── Placeholder SFX for every core event (AC-5.13.1) ────────────────────────────
 
 func test_every_core_event_has_a_placeholder_stream() -> void:
-	# AC-5.13.1: each core event has a real, non-null, non-empty stream (v0.5 adds descend + throw).
+	# AC-5.13.1: each gameplay/UI event has a real, non-null, non-empty placeholder stream.
 	var a := _fresh_audio()
-	var events: Array = ["detonate", "crack", "break", "ore_credited",
-		"pack_open", "relic_found", "prestige_banked", "descend", "throw"]
-	for ev in events:
+	for ev in AudioScript.EVENTS:
 		var s: AudioStream = a.stream_for(ev)
 		assert_object(s).override_failure_message(
 			"event '%s' has no placeholder stream (AC-5.13.1)" % ev
@@ -54,14 +52,27 @@ func test_every_core_event_has_a_placeholder_stream() -> void:
 		).is_greater(0)
 
 func test_events_list_matches_spec_core_events() -> void:
-	# AC-5.13.1 names exactly these core events; pin the set so one can't silently drop. v0.5 adds
-	# the descent (ka-chunk) + throw (whoosh) cues that filled the previously-silent moments — update
-	# this set in lockstep with EVENTS or a missing cue would slip through.
-	var expected := ["break", "crack", "descend", "detonate", "ore_credited",
-		"pack_open", "prestige_banked", "relic_found", "throw"]
+	# AC-5.13.1 names exactly these gameplay/UI events; pin the set so one can't silently drop.
+	var expected := ["break", "button_disabled", "button_hover", "button_press", "charge_select",
+		"coin_fly", "crack", "crate_creak", "crate_drop", "crate_smash", "descend",
+		"detonate", "insufficient_funds", "modal_close", "modal_open", "ore_credited",
+		"pack_open", "prestige_bank", "prestige_banked", "rare_reveal_sting",
+		"relic_found", "run_end_jingle", "throw", "upgrade_purchase"]
 	var got: Array = (AudioScript.EVENTS as Array).duplicate()
 	got.sort()
 	assert_array(got).is_equal(expected)
+
+func test_every_music_track_has_loop_stream() -> void:
+	# AC-5.13.2: placeholder chiptune beds live on the Music bus and compile into loopable streams.
+	var a := _fresh_audio()
+	var expected := ["music_deep", "music_menu", "music_mining", "music_relic", "music_shop"]
+	var tracks: Array = (AudioScript.MUSIC_TRACKS as Array).duplicate()
+	tracks.sort()
+	assert_array(tracks).is_equal(expected)
+	for track in AudioScript.MUSIC_TRACKS:
+		var s: AudioStream = a.music_stream_for(track)
+		assert_object(s).override_failure_message("music track '%s' missing" % track).is_not_null()
+		assert_int((s as AudioStreamWAV).data.size()).is_greater(0)
 
 func test_play_known_event_is_safe_and_unknown_is_noop() -> void:
 	# play() must not crash for a known event (headless = dummy driver) and must no-op for
@@ -185,3 +196,66 @@ func test_descend_and_throw_cues_fire() -> void:
 	a.play_descend()
 	a.play_throw()
 	assert_int(a.play_count).is_equal(before + 2)
+
+# ── Fallback/data drift (CONV-04) ─────────────────────────────────────────────
+
+func test_fallback_specs_match_shipped_audio_json() -> void:
+	# The hardcoded FALLBACK_SPECS in audio.gd must match the shipped audio.json — if they drift,
+	# a load failure or boot-order race falls back to STALE balance silently (CONV-04).
+	GameData.load_all()
+	var data: Dictionary = GameData.tables.get("audio", {})
+	var events: Dictionary = data.get("events", {})
+	assert_bool(events.is_empty()).is_false()
+	for ev in AudioScript.FALLBACK_SPECS:
+		assert_bool(events.has(ev)).override_failure_message(
+			"fallback event '%s' not in audio.json" % ev
+		).is_true()
+		if events.has(ev):
+			var fb: Dictionary = AudioScript.FALLBACK_SPECS[ev]
+			var dt: Dictionary = events[ev]
+			for key in fb:
+				assert_float(float(dt.get(key, -999.0))).override_failure_message(
+					"event '%s' key '%s': fallback %s != data %s" % [ev, key, str(fb[key]), str(dt.get(key))]
+				).is_equal(float(fb[key]))
+	for ev in events:
+		assert_bool(AudioScript.FALLBACK_SPECS.has(ev)).override_failure_message(
+			"audio.json event '%s' has no fallback in FALLBACK_SPECS" % ev
+		).is_true()
+
+func test_fallback_combo_music_detonate_match_shipped_audio_json() -> void:
+	GameData.load_all()
+	var data: Dictionary = GameData.tables.get("audio", {})
+	var combo: Dictionary = data.get("combo", {})
+	for key in AudioScript.FALLBACK_COMBO:
+		assert_float(float(combo.get(key, -999.0))).override_failure_message(
+			"combo key '%s': fallback %s != data %s" % [key, str(AudioScript.FALLBACK_COMBO[key]), str(combo.get(key))]
+		).is_equal(float(AudioScript.FALLBACK_COMBO[key]))
+	var music: Dictionary = data.get("music", {})
+	for track in AudioScript.FALLBACK_MUSIC:
+		assert_bool(music.has(track)).override_failure_message(
+			"fallback music track '%s' not in audio.json" % track
+		).is_true()
+		if music.has(track):
+			var fbm: Dictionary = AudioScript.FALLBACK_MUSIC[track]
+			var dtm: Dictionary = music[track]
+			for key in fbm:
+				if key == "notes":
+					var fb_notes: Array = fbm[key]
+					var dt_notes: Array = dtm.get(key, [])
+					assert_int(dt_notes.size()).is_equal(fb_notes.size())
+					for i in range(fb_notes.size()):
+						assert_float(float(dt_notes[i])).is_equal(float(fb_notes[i]))
+				else:
+					assert_float(float(dtm.get(key, -999.0))).override_failure_message(
+						"music '%s' key '%s': fallback %s != data %s" % [track, key, str(fbm[key]), str(dtm.get(key))]
+					).is_equal(float(fbm[key]))
+	var det: Dictionary = data.get("detonate", {})
+	var layers: Array = det.get("layers", [])
+	assert_int(layers.size()).is_equal(AudioScript.FALLBACK_DETONATE_LAYERS.size())
+	for i in range(mini(layers.size(), AudioScript.FALLBACK_DETONATE_LAYERS.size())):
+		var fbl: Dictionary = AudioScript.FALLBACK_DETONATE_LAYERS[i]
+		var dtl: Dictionary = layers[i]
+		for key in fbl:
+			assert_float(float(dtl.get(key, -999.0))).override_failure_message(
+				"detonate layer %d key '%s': fallback %s != data %s" % [i, key, str(fbl[key]), str(dtl.get(key))]
+			).is_equal(float(fbl[key]))

@@ -54,6 +54,9 @@ var _pity_counter: Dictionary = {}
 ## RESET each dig (no persistence) — re-buyable next dig. Distinct from prestige (which
 ## persists). Drives, e.g., the Shaft Engineering clearance reduction this dig.
 var _upgrade_levels: Dictionary = {}
+## Exact finite charge ids granted by the most recent successful pack buy. UI-only readout for
+## the crate reveal; cleared on dig start and rejected buys.
+var _last_pack_result: Array = []
 
 func _init(tables: Dictionary, economy: Economy, prestige: Prestige = null) -> void:
 	_tables = tables
@@ -73,6 +76,7 @@ func start_dig() -> void:
 	_dig_ended = false
 	_pity_counter.clear()
 	_upgrade_levels.clear()  # per-dig money upgrades reset with the dig (no persistence)
+	_last_pack_result.clear()
 	_selected_id = _free_charge_id
 	_economy.reset_run()
 	# Reproducible pack rolls: seed the run-scoped RNG from the run seed (AC-5.4.5).
@@ -203,6 +207,7 @@ var charge_in_flight: bool:
 ## (AC-5.12.2). Rolls are driven by the run-scoped RNG (reproducible from the run
 ## seed, advanced per draw — AC-5.4.5).
 func buy_pack(pack_id: String) -> bool:
+	_last_pack_result.clear()
 	var pack_data: Dictionary = Registry.pack(_tables, pack_id)
 	if pack_data.is_empty():
 		return false
@@ -210,11 +215,14 @@ func buy_pack(pack_id: String) -> bool:
 	if not _economy.debit(price):
 		return false
 	var before: int = _finite_tray.size()
-	_grant_pack(pack_id)
+	_last_pack_result = _grant_pack(pack_id)
 	# Auto-select the LOWEST-rarity charge just granted (so a pack buy readies its most basic
 	# charge, not whatever was selected before). Ties resolve to the first granted in tray order.
 	_select_lowest_rarity_granted(before)
 	return true
+
+func last_pack_result() -> Array:
+	return _last_pack_result.duplicate()
 
 ## Select the lowest-rarity finite charge among those granted this buy (the slice of the finite
 ## tray added since `from_index`). No-op if nothing new was granted.
@@ -230,15 +238,17 @@ func _select_lowest_rarity_granted(from_index: int) -> void:
 	if best_id != "":
 		_selected_id = best_id
 
-## Roll a pack's charges into the finite tray using the run-scoped RNG.
-func _grant_pack(pack_id: String) -> void:
+## Roll a pack's charges into the finite tray using the run-scoped RNG. Returns the exact charge ids
+## granted by this pack, in draw order, so the UI can visualize the crate reveal without rerolling.
+func _grant_pack(pack_id: String) -> Array:
+	var granted: Array = []
 	var pack_data: Dictionary = Registry.pack(_tables, pack_id)
 	if pack_data.is_empty():
-		return
+		return granted
 	var count: int = int(pack_data.get("charge_count", 0))
 	var weights: Dictionary = pack_data.get("weights", {})
 	if weights.is_empty() or count <= 0:
-		return
+		return granted
 
 	var keys: Array = weights.keys()
 	keys.sort()  # fixed walk order so a fixed seed yields a fixed result
@@ -246,7 +256,7 @@ func _grant_pack(pack_id: String) -> void:
 	for k in keys:
 		total_weight += float(weights[k])
 	if total_weight <= 0.0:
-		return
+		return granted
 
 	var pity_every: int = int(pack_data.get("pity_every", 0))
 
@@ -263,6 +273,8 @@ func _grant_pack(pack_id: String) -> void:
 			else:
 				_pity_counter[pack_id] = since + 1
 		_finite_tray.append(rolled)
+		granted.append(rolled)
+	return granted
 
 ## Weighted selection over sorted keys using the run-scoped RNG.
 func _weighted_roll(keys: Array, weights: Dictionary, total_weight: float) -> String:

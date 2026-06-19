@@ -3,7 +3,7 @@
   "mine_width_cells": 400,
   "mine_height_cells": 0,
   "shaft_width_cells": 9,
-  "platform_width_cells": 7,
+  "platform_width_cells": 3,
   "chunk_height_cells": 16,
   "crack_stages": 3,
   "platform_clear_threshold": 9,
@@ -30,7 +30,8 @@
   "blast_fuzz_pct": 0.25,
   "charge_min_airtime_seconds": 0.12,
   "charge_min_travel_px": 8.0,
-  "starting_money": 50,
+  "sticky_min_delay_seconds": 0.15,
+  "starting_money": 60,
   "run_seed": 1337,
   "depth_hp_mult_per_cell": 0.01,
   "max_depth_hp_mult": 7.0,
@@ -47,6 +48,28 @@
   "ui_flash_alpha": 0.45,
   "ui_flash_seconds": 0.3,
   "ui_tray_pop_seconds": 0.14,
+  "ui_selector": {
+    "slot_width_px": 88,
+    "slot_height_px": 78,
+    "icon_px": 48,
+    "selector_bar_height_px": 88,
+    "selected_bob_px": 3.0,
+    "selected_bob_seconds": 1.2,
+    "long_press_seconds": 0.45,
+    "popover_seconds": 3.0
+  },
+  "ui_crate": {
+    "drop_seconds": 0.26,
+    "open_seconds": 0.22,
+    "reveal_seconds": 0.34,
+    "settle_seconds": 0.18,
+    "hold_seconds": 0.45,
+    "reduced_hold_seconds": 0.45,
+    "rare_hitstop_seconds": 0.055,
+    "card_stagger_seconds": 0.07,
+    "lid_lift_px": 26.0,
+    "particle_count_rare": 18
+  },
   "settings": {
     "default_sfx_volume": 0.8,
     "default_music_volume": 0.6,
@@ -82,13 +105,15 @@
   "feel": {
     "throw_button_squash": 0.86,
     "throw_button_pop_seconds": 0.12,
-    "aim_line_width": 5.0,
+    "aim_line_width": 2.5,
     "aim_scroll_speed": 60.0,
     "recoil_px": 6.0,
     "muzzle_flash_particles": 10,
     "keyboard_aim_deg_per_sec": 90.0,
-    "aim_march_px": 60.0,
-    "aim_dash_px": 18.0,
-    "aim_gap_px": 14.0
+    "aim_march_px": 48.0,
+    "aim_march_aim_mult": 2.6,
+    "aim_march_ease_rate": 8.0,
+    "aim_dash_px": 8.0,
+    "aim_gap_px": 7.0
   }
 }

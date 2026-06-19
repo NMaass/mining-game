@@ -15,13 +15,9 @@ signal buy_upgrade_pressed(upgrade_id: String)
 signal closed
 
 const PIXEL_FONT := preload("res://art/fonts/PixelifySans.ttf")
-
-## Crate icon tints: rusty (basic) and steel-blue (heavy_crate). A default gray covers
-## any future pack ids without an explicit mapping.
-const _CRATE_COLORS: Dictionary = {
-	"basic": Color(0.85, 0.45, 0.18),
-	"heavy_crate": Color(0.38, 0.48, 0.62),
-}
+const _ChargeIcon := preload("res://scripts/ui/charge_icon.gd")
+const _PixelUi := preload("res://scripts/ui/pixel_ui.gd")
+const _CrateReveal := preload("res://scripts/ui/crate_reveal.gd")
 
 @export var primary_button_normal: StyleBoxFlat
 @export var primary_button_hover: StyleBoxFlat
@@ -39,12 +35,18 @@ var _get_upgrade_level: Callable
 var _buy_buttons: Dictionary = {}
 var _upgrade_buttons: Dictionary = {}  # upgrade_id -> Button
 var _tween: Tween = null
+var _reveal: CrateReveal = null
+var _close_after_reveal: bool = false
+var _text_scale: float = 1.0
+var _motion: float = 1.0
 
 
 func _ready() -> void:
 	visible = false
 	if _close_button != null and not _close_button.pressed.is_connected(close):
 		_close_button.pressed.connect(close)
+	_PixelUi.apply_button(_close_button, "secondary", 24)
+	_PixelUi.bind_button_feel(_close_button, Callable(self, "_motion_value"))
 
 
 ## Bind the data tables and a callback that returns the player's current money. The
@@ -54,6 +56,7 @@ func configure(tables: Dictionary, get_money_callback: Callable, get_upgrade_lev
 	_tables = tables
 	_get_money = get_money_callback
 	_get_upgrade_level = get_upgrade_level_callback
+	_ensure_reveal()
 	_build_entries()
 
 
@@ -62,15 +65,22 @@ func configure(tables: Dictionary, get_money_callback: Callable, get_upgrade_lev
 func refresh() -> void:
 	_refresh_affordability(_current_money())
 
+func set_text_scale(scale: float) -> void:
+	_text_scale = clampf(scale, 0.8, 2.0)
+	_apply_text_scale_to_tree(self)
+
 
 ## Open the shop, pause the game tree, and refresh each BUY button from current money.
 func open(motion: float = 1.0) -> void:
+	_motion = clampf(motion, 0.0, 1.0)
 	visible = true
 	var money: int = _current_money()
 	_refresh_affordability(money)
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	Audio.notify_user_gesture()
+	Audio.play("modal_open")
 	_animate_in(motion)
 
 
@@ -88,7 +98,15 @@ func close() -> void:
 		_panel.modulate = Color(1, 1, 1, 1)
 	if _backdrop != null:
 		_backdrop.modulate = Color(1, 1, 1, 1)
+	Audio.notify_user_gesture()
+	Audio.play("modal_close")
 	closed.emit()
+
+func play_pack_reveal(pack_id: String, results: Array, motion: float = 1.0) -> void:
+	_ensure_reveal()
+	_motion = clampf(motion, 0.0, 1.0)
+	_close_after_reveal = true
+	_reveal.show_pack(pack_id, results, motion)
 
 
 func _current_money() -> int:
@@ -121,10 +139,12 @@ func _build_entries() -> void:
 		entry.alignment = BoxContainer.ALIGNMENT_CENTER
 		entry.add_theme_constant_override("separation", 6)
 
-		var icon := ColorRect.new()
+		var icon := TextureRect.new()
 		icon.name = "Icon"
 		icon.custom_minimum_size = Vector2(64, 64)
-		icon.color = _CRATE_COLORS.get(pack_id, Color(0.55, 0.55, 0.6))
+		icon.texture = _ChargeIcon.crate_texture(_tables, pack_id, 64)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		entry.add_child(icon)
 
 		var title_label := Label.new()
@@ -167,13 +187,8 @@ func _build_entries() -> void:
 		buy_btn.name = "Buy_%s" % pack_id
 		buy_btn.text = "BUY"
 		buy_btn.custom_minimum_size = Vector2(0, 48)
-		buy_btn.add_theme_font_override("font", PIXEL_FONT)
-		buy_btn.add_theme_font_size_override("font_size", 22)
-		if primary_button_normal != null:
-			buy_btn.add_theme_stylebox_override("normal", primary_button_normal)
-		if primary_button_hover != null:
-			buy_btn.add_theme_stylebox_override("hover", primary_button_hover)
-			buy_btn.add_theme_stylebox_override("pressed", primary_button_hover)
+		_PixelUi.apply_button(buy_btn, "primary", 22)
+		_PixelUi.bind_button_feel(buy_btn, Callable(self, "_motion_value"))
 		buy_btn.pressed.connect(_on_buy.bind(pack_id))
 		entry.add_child(buy_btn)
 		_buy_buttons[pack_id] = buy_btn
@@ -198,10 +213,12 @@ func _build_upgrade_entry(up_id: String, up: Dictionary) -> VBoxContainer:
 	entry.alignment = BoxContainer.ALIGNMENT_CENTER
 	entry.add_theme_constant_override("separation", 6)
 
-	var icon := ColorRect.new()
+	var icon := TextureRect.new()
 	icon.name = "Icon"
 	icon.custom_minimum_size = Vector2(64, 64)
-	icon.color = Color(0.42, 0.62, 0.45)  # green-tinted: a permanent-feeling tool upgrade
+	icon.texture = _ChargeIcon.texture_for(_tables, "drill_charge", 64)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	entry.add_child(icon)
 
 	var title_label := Label.new()
@@ -234,13 +251,8 @@ func _build_upgrade_entry(up_id: String, up: Dictionary) -> VBoxContainer:
 	buy_btn.name = "Buy_%s" % up_id
 	buy_btn.text = "BUY"
 	buy_btn.custom_minimum_size = Vector2(0, 48)
-	buy_btn.add_theme_font_override("font", PIXEL_FONT)
-	buy_btn.add_theme_font_size_override("font_size", 22)
-	if primary_button_normal != null:
-		buy_btn.add_theme_stylebox_override("normal", primary_button_normal)
-	if primary_button_hover != null:
-		buy_btn.add_theme_stylebox_override("hover", primary_button_hover)
-		buy_btn.add_theme_stylebox_override("pressed", primary_button_hover)
+	_PixelUi.apply_button(buy_btn, "primary", 22)
+	_PixelUi.bind_button_feel(buy_btn, Callable(self, "_motion_value"))
 	buy_btn.pressed.connect(_on_buy_upgrade.bind(up_id))
 	entry.add_child(buy_btn)
 	_upgrade_buttons[up_id] = buy_btn
@@ -314,10 +326,20 @@ func _upgrade_level(upgrade_id: String) -> int:
 
 
 func _on_buy(pack_id: String) -> void:
+	var pack_data: Dictionary = Registry.pack(_tables, pack_id)
+	if _current_money() < int(pack_data.get("price", 0)):
+		Audio.play("insufficient_funds")
+		_shake_button(_buy_buttons.get(pack_id, null) as Button)
+		return
 	buy_pressed.emit(pack_id)
 
 
 func _on_buy_upgrade(upgrade_id: String) -> void:
+	var up: Dictionary = Registry.upgrade(_tables, upgrade_id)
+	if _current_money() < int(up.get("price", 0)):
+		Audio.play("insufficient_funds")
+		_shake_button(_upgrade_buttons.get(upgrade_id, null) as Button)
+		return
 	buy_upgrade_pressed.emit(upgrade_id)
 
 
@@ -346,3 +368,40 @@ func _animate_in(motion: float) -> void:
 	if _backdrop != null:
 		_tween.tween_property(_backdrop, "modulate", Color(1, 1, 1, 1), seconds) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+func _ensure_reveal() -> void:
+	if _reveal != null:
+		return
+	_reveal = _CrateReveal.new()
+	_reveal.name = "CrateReveal"
+	add_child(_reveal)
+	_reveal.configure(_tables)
+	if not _reveal.finished.is_connected(_on_reveal_finished):
+		_reveal.finished.connect(_on_reveal_finished)
+
+func _on_reveal_finished() -> void:
+	if _close_after_reveal:
+		_close_after_reveal = false
+		close()
+
+func _motion_value() -> float:
+	return _motion
+
+func _shake_button(btn: Button) -> void:
+	if btn == null:
+		return
+	var tw := create_tween()
+	tw.tween_property(btn, "position:x", btn.position.x - 5.0, 0.035)
+	tw.tween_property(btn, "position:x", btn.position.x + 5.0, 0.055)
+	tw.tween_property(btn, "position:x", btn.position.x, 0.04)
+
+func _apply_text_scale_to_tree(root: Node) -> void:
+	if root is Label:
+		var label := root as Label
+		var base: int = int(label.get_meta("_base_font_size", label.get_theme_font_size("font_size")))
+		if base <= 0:
+			base = 18
+		label.set_meta("_base_font_size", base)
+		label.add_theme_font_size_override("font_size", maxi(8, int(round(float(base) * _text_scale))))
+	for child in root.get_children():
+		_apply_text_scale_to_tree(child)

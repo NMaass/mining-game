@@ -63,6 +63,22 @@ func test_zero_direction_never_moves() -> void:
 	# A 0 direction (no key) never moves either way, regardless of platform state.
 	assert_bool(Mine.may_move_elevator(0, true, true, false)).is_false()
 
+# ── Mine.slot_index_for_keycode (number-key → hotbar slot index, AC-5.3.6) ────
+# Pure mapping so the number-key→selection path is testable without firing key events (which don't
+# fire headless). 1..9 map to 0..8; everything else (0, non-digit, out-of-range) maps to -1.
+
+func test_number_key_maps_to_zero_based_slot_index() -> void:
+	# AC-5.3.6: pressing "1" selects slot 0 (the free charge), "2" → slot 1, … "9" → slot 8.
+	assert_int(Mine.slot_index_for_keycode(KEY_1)).is_equal(0)
+	assert_int(Mine.slot_index_for_keycode(KEY_2)).is_equal(1)
+	assert_int(Mine.slot_index_for_keycode(KEY_9)).is_equal(8)
+
+func test_non_digit_keycode_maps_to_minus_one() -> void:
+	# A non-digit (or KEY_0, which has no slot) maps to -1 → no selection attempt.
+	assert_int(Mine.slot_index_for_keycode(KEY_0)).is_equal(-1)
+	assert_int(Mine.slot_index_for_keycode(KEY_A)).is_equal(-1)
+	assert_int(Mine.slot_index_for_keycode(KEY_SPACE)).is_equal(-1)
+
 # ── AimController.set_angle (shared angle API the keyboard path pushes into) ──
 
 func test_set_angle_updates_and_signals() -> void:

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "res://data/schemas/ui_overhaul.schema.json",
+  "title": "UI overhaul balance blocks",
+  "type": "object",
+  "required": ["ui_selector", "ui_crate"],
+  "properties": {
+    "ui_selector": {
+      "type": "object",
+      "required": [
+        "slot_width_px",
+        "slot_height_px",
+        "icon_px",
+        "selector_bar_height_px",
+        "selected_bob_px",
+        "selected_bob_seconds",
+        "long_press_seconds",
+        "popover_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "slot_width_px": { "type": "number", "minimum": 44 },
+        "slot_height_px": { "type": "number", "minimum": 44 },
+        "icon_px": { "type": "number", "minimum": 44 },
+        "selector_bar_height_px": { "type": "number", "minimum": 44 },
+        "selected_bob_px": { "type": "number", "exclusiveMinimum": 0 },
+        "selected_bob_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "long_press_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "popover_seconds": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "ui_crate": {
+      "type": "object",
+      "required": [
+        "drop_seconds",
+        "open_seconds",
+        "reveal_seconds",
+        "settle_seconds",
+        "hold_seconds",
+        "reduced_hold_seconds",
+        "rare_hitstop_seconds",
+        "card_stagger_seconds",
+        "lid_lift_px",
+        "particle_count_rare"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "drop_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "open_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "reveal_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "settle_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "hold_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "reduced_hold_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "rare_hitstop_seconds": { "type": "number", "minimum": 0, "maximum": 0.12 },
+        "card_stagger_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "lid_lift_px": { "type": "number", "exclusiveMinimum": 0 },
+        "particle_count_rare": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

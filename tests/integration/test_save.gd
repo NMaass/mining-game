@@ -8,7 +8,7 @@ extends GdUnitTestSuite
 const Manager := preload("res://scripts/systems/save_manager.gd")
 const Codec := preload("res://scripts/core/save_codec.gd")
 
-const TEST_PATH := "user://test_mining_save.json"
+var TEST_PATH: String
 
 func _mgr() -> SaveManager:
 	return Manager.new(TEST_PATH)
@@ -19,6 +19,7 @@ func _corrupt(path: String) -> void:
 	f.close()
 
 func before_test() -> void:
+	TEST_PATH = OS.get_temp_dir().path_join("test_mining_save.json")
 	_mgr().clear()
 
 func after_test() -> void:
@@ -104,3 +105,37 @@ func test_prestige_durable_state_round_trips_through_save() -> void:
 	assert_bool(mult_before > 1.0).override_failure_message(
 		"the bought upgrade should raise the multiplier — otherwise the round-trip proves nothing"
 	).is_true()
+
+func test_manual_export_import_round_trips_save_text() -> void:
+	# AC-5.11.5: manual export/import is a normalized JSON save path for web users whose IndexedDB
+	# storage can be evicted or temporary.
+	var m := _mgr()
+	assert_bool(m.save_state({"prestige": {"points": 12, "levels": {"blast_power": 1}}})).is_true()
+	var exported: String = m.export_save_text()
+	assert_str(exported).contains("\"version\"")
+	assert_str(exported).contains("\"prestige\"")
+
+	m.clear()
+	assert_bool(m.import_save_text(exported)).is_true()
+	var loaded: Dictionary = m.load_state()
+	assert_int(int(loaded["prestige"]["points"])).is_equal(12)
+	assert_int(int(loaded["prestige"]["levels"]["blast_power"])).is_equal(1)
+
+func test_manual_import_rejects_corrupt_json_without_overwriting() -> void:
+	# AC-5.11.5: a pasted corrupt export must not clobber the existing good save.
+	var m := _mgr()
+	assert_bool(m.save_state({"prestige": {"points": 7, "levels": {}}})).is_true()
+	assert_bool(m.import_save_text("{{{ nope")).is_false()
+	assert_int(int(m.load_state()["prestige"]["points"])).is_equal(7)
+
+func test_default_save_path_is_namespaced() -> void:
+	# AC-5.11.5: web IndexedDB state is per-origin and evictable, so the shipped save path is
+	# namespaced under the game instead of a flat user:// filename.
+	var m := Manager.new(Manager.DEFAULT_PRIMARY)
+	assert_str(m.primary_path()).is_equal(Manager.DEFAULT_PRIMARY)
+	assert_str(m.primary_path()).contains("user://mining_game/")
+
+func test_native_persistence_status_is_available() -> void:
+	var status: Dictionary = Manager.persistence_status()
+	assert_bool(bool(status.get("available"))).is_true()
+	assert_str(str(status.get("warning", ""))).is_empty()

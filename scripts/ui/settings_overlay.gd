@@ -28,6 +28,14 @@ signal settings_changed
 ## Emitted when a keybind capture commits a new key for `action` (the controller mirrors it into the
 ## live InputMap). The SettingsState is ALSO updated here, so settings_changed fires alongside.
 signal keybind_rebound(action: String, keycode: int)
+## Emitted when the player asks the controller to serialize the current save into the text box.
+signal save_export_requested
+## Emitted when the player asks the controller to import the text box contents as a save export.
+signal save_import_requested(text: String)
+
+const PIXEL_FONT := preload("res://art/fonts/PixelifySans.ttf")
+const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
+const ATTRIBUTIONS_PATH := "res://spec/ATTRIBUTIONS.md"
 
 var _tables: Dictionary = {}
 var _settings: SettingsState = null
@@ -40,6 +48,16 @@ var _tween: Tween = null
 var _capturing_action: String = ""
 ## action → its rebind Button (built in _build_rebind_rows), so a capture can update one row's text.
 var _rebind_buttons: Dictionary = {}
+var _save_warning: String = ""
+var _save_warning_label: Label = null
+var _save_status_label: Label = null
+var _save_export_button: Button = null
+var _save_import_button: Button = null
+var _save_text: TextEdit = null
+var _credits_button: Button = null
+var _credits_panel: PanelContainer = null
+var _credits_label: Label = null
+var _text_scale: float = 1.0
 
 @onready var _dim: Control = get_node_or_null("Dim")
 @onready var _dialog: Control = get_node_or_null("Center/Dialog")
@@ -75,9 +93,34 @@ func configure(tables: Dictionary, settings: SettingsState) -> void:
 		_text_scale_slider.min_value = _settings.text_scale_min
 		_text_scale_slider.max_value = _settings.text_scale_max
 	_build_rebind_rows()
+	_build_save_controls()
+	_build_credits_controls()
 	_sync_from_settings()
 	_connect_once()
 	_refresh_labels()
+	set_text_scale(_settings.text_scale if _settings != null else _text_scale)
+
+
+func set_text_scale(scale: float) -> void:
+	_text_scale = clampf(scale, 0.8, 2.0)
+	_apply_text_scale_to_tree(self)
+
+
+func set_save_persistence_warning(warning: String) -> void:
+	_save_warning = warning.strip_edges()
+	if _save_warning_label != null:
+		_save_warning_label.text = _save_warning
+		_save_warning_label.visible = not _save_warning.is_empty()
+
+
+func set_save_export_text(text: String) -> void:
+	if _save_text != null:
+		_save_text.text = text
+	_set_save_status("Save exported.")
+
+
+func set_save_import_result(ok: bool) -> void:
+	_set_save_status("Save imported." if ok else "Import failed.")
 
 
 ## Open the modal overlay: reflect current settings, show, and PAUSE the tree (AC-5.8.3). The Mine
@@ -95,6 +138,8 @@ func open() -> void:
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = true
+	Audio.notify_user_gesture()
+	Audio.play("modal_open")
 	_animate_in()
 
 
@@ -140,6 +185,8 @@ func close() -> void:
 	var tree := get_tree()
 	if tree != null:
 		tree.paused = false
+	Audio.notify_user_gesture()
+	Audio.play("modal_close")
 	closed.emit()
 
 
@@ -180,6 +227,10 @@ func _connect_once() -> void:
 		_elevator_side_button.pressed.connect(_on_elevator_side_pressed)
 	if _close_button != null and not _close_button.pressed.is_connected(close):
 		_close_button.pressed.connect(close)
+	for btn in [_elevator_side_button, _close_button]:
+		if btn != null:
+			PIXEL_UI_SCRIPT.apply_button(btn, "secondary", 20)
+			PIXEL_UI_SCRIPT.bind_button_feel(btn, Callable(self, "_motion_value"))
 
 
 func _on_sfx_changed(v: float) -> void:
@@ -211,6 +262,7 @@ func _on_text_scale_changed(v: float) -> void:
 		return
 	_settings.set_text_scale(v)
 	_refresh_labels()
+	set_text_scale(v)
 	settings_changed.emit()
 
 
@@ -254,6 +306,8 @@ func _build_rebind_rows() -> void:
 		btn.name = "Key"
 		btn.custom_minimum_size = Vector2(180, 48)
 		btn.add_theme_font_size_override("font_size", 20)
+		PIXEL_UI_SCRIPT.apply_button(btn, "secondary", 18)
+		PIXEL_UI_SCRIPT.bind_button_feel(btn, Callable(self, "_motion_value"))
 		# Bind the action id so one shared handler knows which row was tapped.
 		btn.pressed.connect(_on_rebind_pressed.bind(action))
 		row.add_child(btn)
@@ -356,6 +410,157 @@ func _refresh_labels() -> void:
 		_text_scale_label.text = "UI text scale   %.1fx" % _settings.text_scale
 
 
+func _build_save_controls() -> void:
+	if _content == null or _save_export_button != null:
+		return
+	var spacer := HSeparator.new()
+	spacer.name = "SaveSeparator"
+	_content.add_child(spacer)
+
+	var title := Label.new()
+	title.name = "SaveTitle"
+	title.text = "Save"
+	title.add_theme_font_override("font", PIXEL_FONT)
+	title.add_theme_font_size_override("font_size", 22)
+	_content.add_child(title)
+
+	_save_warning_label = Label.new()
+	_save_warning_label.name = "SaveWarning"
+	_save_warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_save_warning_label.visible = false
+	_content.add_child(_save_warning_label)
+	set_save_persistence_warning(_save_warning)
+
+	var row := HBoxContainer.new()
+	row.name = "SaveButtons"
+	row.add_theme_constant_override("separation", 10)
+	_content.add_child(row)
+
+	_save_export_button = Button.new()
+	_save_export_button.name = "SaveExportButton"
+	_save_export_button.text = "EXPORT SAVE"
+	_save_export_button.custom_minimum_size = Vector2(190, 48)
+	PIXEL_UI_SCRIPT.apply_button(_save_export_button, "secondary", 18)
+	PIXEL_UI_SCRIPT.bind_button_feel(_save_export_button, Callable(self, "_motion_value"))
+	_save_export_button.pressed.connect(_on_save_export_pressed)
+	row.add_child(_save_export_button)
+
+	_save_import_button = Button.new()
+	_save_import_button.name = "SaveImportButton"
+	_save_import_button.text = "IMPORT SAVE"
+	_save_import_button.custom_minimum_size = Vector2(190, 48)
+	PIXEL_UI_SCRIPT.apply_button(_save_import_button, "secondary", 18)
+	PIXEL_UI_SCRIPT.bind_button_feel(_save_import_button, Callable(self, "_motion_value"))
+	_save_import_button.pressed.connect(_on_save_import_pressed)
+	row.add_child(_save_import_button)
+
+	_save_text = TextEdit.new()
+	_save_text.name = "SaveText"
+	_save_text.custom_minimum_size = Vector2(0, 130)
+	_save_text.placeholder_text = "Paste or export save JSON"
+	_save_text.add_theme_font_override("font", PIXEL_FONT)
+	_save_text.add_theme_font_size_override("font_size", 16)
+	_content.add_child(_save_text)
+
+	_save_status_label = Label.new()
+	_save_status_label.name = "SaveStatus"
+	_save_status_label.visible = false
+	_content.add_child(_save_status_label)
+
+
+func _on_save_export_pressed() -> void:
+	save_export_requested.emit()
+
+
+func _on_save_import_pressed() -> void:
+	save_import_requested.emit(_save_text.text if _save_text != null else "")
+
+
+func _set_save_status(text: String) -> void:
+	if _save_status_label == null:
+		return
+	_save_status_label.text = text
+	_save_status_label.visible = not text.strip_edges().is_empty()
+
+
+func _build_credits_controls() -> void:
+	if _content == null or _credits_button != null:
+		return
+	var spacer := HSeparator.new()
+	spacer.name = "CreditsSeparator"
+	_content.add_child(spacer)
+
+	var title := Label.new()
+	title.name = "CreditsTitle"
+	title.text = "Credits / Attributions"
+	title.add_theme_font_override("font", PIXEL_FONT)
+	title.add_theme_font_size_override("font_size", 22)
+	_content.add_child(title)
+
+	_credits_button = Button.new()
+	_credits_button.name = "CreditsButton"
+	_credits_button.text = "OPEN CREDITS"
+	_credits_button.custom_minimum_size = Vector2(220, 48)
+	PIXEL_UI_SCRIPT.apply_button(_credits_button, "secondary", 20)
+	PIXEL_UI_SCRIPT.bind_button_feel(_credits_button, Callable(self, "_motion_value"))
+	_credits_button.pressed.connect(_toggle_credits)
+	_content.add_child(_credits_button)
+
+	_credits_panel = PanelContainer.new()
+	_credits_panel.name = "CreditsPanel"
+	_credits_panel.visible = false
+	_credits_panel.custom_minimum_size = Vector2(0, 180)
+	PIXEL_UI_SCRIPT.apply_panel(_credits_panel)
+	_credits_label = Label.new()
+	_credits_label.name = "CreditsText"
+	_credits_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_credits_label.text = _load_attributions_text()
+	_credits_label.add_theme_font_override("font", PIXEL_FONT)
+	_credits_label.add_theme_font_size_override("font_size", 16)
+	_credits_panel.add_child(_credits_label)
+	_content.add_child(_credits_panel)
+
+
+func _toggle_credits() -> void:
+	if _credits_panel == null or _credits_button == null:
+		return
+	_credits_panel.visible = not _credits_panel.visible
+	_credits_button.text = "HIDE CREDITS" if _credits_panel.visible else "OPEN CREDITS"
+
+
+func _load_attributions_text() -> String:
+	if not FileAccess.file_exists(ATTRIBUTIONS_PATH):
+		return "No attribution file found at %s." % ATTRIBUTIONS_PATH
+	var text := FileAccess.get_file_as_string(ATTRIBUTIONS_PATH).strip_edges()
+	if text.is_empty():
+		return "No attribution entries yet."
+	return text
+
+
+func _motion_value() -> float:
+	return _settings.motion_intensity if _settings != null else 1.0
+
+
+func _apply_text_scale_to_tree(root: Node) -> void:
+	var font_size := int(round(20.0 * _text_scale))
+	if root is Label:
+		var label := root as Label
+		label.add_theme_font_override("font", PIXEL_FONT)
+		label.add_theme_font_size_override("font_size", font_size)
+	elif root is Button:
+		var button := root as Button
+		button.add_theme_font_override("font", PIXEL_FONT)
+		button.add_theme_font_size_override("font_size", font_size)
+	elif root is TextEdit:
+		var edit := root as TextEdit
+		edit.add_theme_font_override("font", PIXEL_FONT)
+		edit.add_theme_font_size_override("font_size", int(round(16.0 * _text_scale)))
+	if root == _credits_label and _credits_label != null:
+		_credits_label.add_theme_font_size_override("font_size", int(round(16.0 * _text_scale)))
+	for child in root.get_children():
+		_apply_text_scale_to_tree(child)
+
+
 # ── Test/inspection accessors (the controls the integration test drives) ─────────
 
 func sfx_slider() -> HSlider:
@@ -372,6 +577,21 @@ func text_scale_slider() -> HSlider:
 
 func elevator_side_button() -> Button:
 	return _elevator_side_button
+
+func save_export_button() -> Button:
+	return _save_export_button
+
+func save_import_button() -> Button:
+	return _save_import_button
+
+func save_text() -> TextEdit:
+	return _save_text
+
+func save_warning_label() -> Label:
+	return _save_warning_label
+
+func save_status_label() -> Label:
+	return _save_status_label
 
 ## The rebind Button for `action` (or null). For tests/inspection.
 func rebind_button(action: String) -> Button:

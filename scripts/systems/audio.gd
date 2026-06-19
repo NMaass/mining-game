@@ -35,6 +35,13 @@ const EVENTS: Array[String] = [
 	"detonate", "crack", "break", "ore_credited",
 	"pack_open", "relic_found", "prestige_banked",
 	"descend", "throw",
+	"crate_drop", "crate_creak", "crate_smash", "rare_reveal_sting",
+	"charge_select", "button_hover", "button_press", "button_disabled",
+	"modal_open", "modal_close", "insufficient_funds", "coin_fly",
+	"prestige_bank", "run_end_jingle", "upgrade_purchase",
+]
+const MUSIC_TRACKS: Array[String] = [
+	"music_menu", "music_mining", "music_deep", "music_relic", "music_shop",
 ]
 
 ## Voice pool size — bumped 4→8 (v0.5) so the rising-pitch break-combo rattle (up to combo.max_voices)
@@ -60,6 +67,21 @@ const FALLBACK_SPECS := {
 	"prestige_banked": {"freq": 740.0, "dur": 0.25, "noise": 0.0,  "sweep": 1109.0, "pitch_jitter": 0.0},
 	"descend":         {"freq": 80.0,  "dur": 0.18, "noise": 0.45, "sweep": 55.0,   "pitch_jitter": 0.05},
 	"throw":           {"freq": 300.0, "dur": 0.12, "noise": 0.85, "sweep": 900.0,  "pitch_jitter": 0.1},
+	"crate_drop":      {"freq": 95.0,  "dur": 0.18, "noise": 0.55, "sweep": 52.0,   "pitch_jitter": 0.06},
+	"crate_creak":     {"freq": 260.0, "dur": 0.22, "noise": 0.35, "sweep": 180.0,  "pitch_jitter": 0.08},
+	"crate_smash":     {"freq": 120.0, "dur": 0.24, "noise": 0.90, "sweep": 40.0,   "pitch_jitter": 0.10},
+	"rare_reveal_sting":{"freq": 523.0,"dur": 0.55, "noise": 0.05, "sweep": 1568.0, "pitch_jitter": 0.0},
+	"charge_select":   {"freq": 780.0, "dur": 0.08, "noise": 0.0,  "sweep": 980.0,  "pitch_jitter": 0.04},
+	"button_hover":    {"freq": 520.0, "dur": 0.035,"noise": 0.0,  "sweep": 620.0,  "pitch_jitter": 0.03},
+	"button_press":    {"freq": 300.0, "dur": 0.055,"noise": 0.08, "sweep": 220.0,  "pitch_jitter": 0.05},
+	"button_disabled": {"freq": 160.0, "dur": 0.09, "noise": 0.25, "sweep": 120.0,  "pitch_jitter": 0.04},
+	"modal_open":      {"freq": 440.0, "dur": 0.14, "noise": 0.0,  "sweep": 660.0,  "pitch_jitter": 0.02},
+	"modal_close":     {"freq": 360.0, "dur": 0.11, "noise": 0.0,  "sweep": 240.0,  "pitch_jitter": 0.02},
+	"insufficient_funds":{"freq": 110.0,"dur": 0.16, "noise": 0.4, "sweep": 85.0,   "pitch_jitter": 0.04},
+	"coin_fly":        {"freq": 1320.0,"dur": 0.045,"noise": 0.0,  "sweep": 1760.0, "pitch_jitter": 0.06},
+	"prestige_bank":   {"freq": 740.0, "dur": 0.32, "noise": 0.0,  "sweep": 1480.0, "pitch_jitter": 0.0},
+	"run_end_jingle":  {"freq": 660.0, "dur": 0.50, "noise": 0.0,  "sweep": 990.0,  "pitch_jitter": 0.0},
+	"upgrade_purchase":{"freq": 600.0, "dur": 0.22, "noise": 0.02, "sweep": 900.0,  "pitch_jitter": 0.02},
 }
 const FALLBACK_COMBO := {"max_voices": 6, "step_seconds": 0.025, "semitone_step": 1.0}
 ## Fallback layered-boom voices (low body + bright transient + noise tail).
@@ -68,14 +90,30 @@ const FALLBACK_DETONATE_LAYERS := [
 	{"freq": 180.0, "dur": 0.08, "noise": 0.4,  "sweep": 60.0, "pitch_jitter": 0.1},
 	{"freq": 90.0,  "dur": 0.3,  "noise": 0.95, "sweep": 40.0, "pitch_jitter": 0.12},
 ]
+const FALLBACK_MUSIC := {
+	"music_menu": {"bpm": 108.0, "step_beats": 0.5, "volume": 0.16, "notes": [220.0, 0.0, 277.18, 0.0, 329.63, 0.0, 277.18, 0.0, 196.0, 0.0, 246.94, 0.0, 293.66, 0.0, 246.94, 0.0]},
+	"music_mining": {"bpm": 126.0, "step_beats": 0.5, "volume": 0.13, "notes": [110.0, 164.81, 220.0, 164.81, 123.47, 185.0, 246.94, 185.0, 98.0, 146.83, 196.0, 146.83, 123.47, 185.0, 246.94, 185.0]},
+	"music_deep": {"bpm": 118.0, "step_beats": 0.5, "volume": 0.14, "notes": [82.41, 123.47, 164.81, 123.47, 92.5, 138.59, 185.0, 138.59, 73.42, 110.0, 146.83, 110.0, 92.5, 138.59, 185.0, 138.59]},
+	"music_relic": {"bpm": 96.0, "step_beats": 0.5, "volume": 0.18, "notes": [261.63, 329.63, 392.0, 523.25, 659.25, 783.99, 1046.5, 0.0]},
+	"music_shop": {"bpm": 104.0, "step_beats": 0.5, "volume": 0.13, "notes": [196.0, 246.94, 293.66, 246.94, 220.0, 277.18, 329.63, 277.18, 196.0, 246.94, 293.66, 369.99, 329.63, 293.66, 246.94, 220.0]},
+}
+const MUSIC_FADE_DB := -60.0
 
 var _streams: Dictionary = {}            # event -> AudioStreamWAV
 var _pitch_jitter: Dictionary = {}       # event -> float (per-play pitch variance)
 var _detonate_layers: Array = []         # the layered-boom voices [AudioStreamWAV, ...] + jitters
+var _music_streams: Dictionary = {}       # track -> AudioStreamWAV
+var _music_specs: Dictionary = {}         # track -> spec (volume)
 var _combo: Dictionary = FALLBACK_COMBO.duplicate(true)
 var _players: Array[AudioStreamPlayer] = []
+var _music_players: Array[AudioStreamPlayer] = []
 var _voice: int = 0
+var _music_voice: int = 0
 var _unlocked: bool = false
+var _current_music: String = ""
+var _pending_music: String = ""
+var _music_tween: Tween = null
+var _duck_tween: Tween = null
 # A MODULE RNG for per-play pitch jitter — distinct from the per-tone seeded RNG in _make_tone (which
 # keeps the synthesised waveform stable). Randomised at startup so repeated cues vary run-to-run.
 var _rng := RandomNumberGenerator.new()
@@ -91,6 +129,12 @@ func _ready() -> void:
 		p.bus = SFX_BUS
 		add_child(p)
 		_players.append(p)
+	for i in range(2):
+		var mp := AudioStreamPlayer.new()
+		mp.bus = MUSIC_BUS
+		mp.volume_db = MUSIC_FADE_DB
+		add_child(mp)
+		_music_players.append(mp)
 	# Web: the audio context is suspended until a user gesture (AC-5.13.3). Listen for the
 	# first input and unlock then. Harmless on native (the flag just flips once).
 	set_process_unhandled_input(true)
@@ -114,6 +158,10 @@ func notify_user_gesture() -> void:
 	var master: int = AudioServer.get_bus_index(MASTER_BUS)
 	if master >= 0:
 		AudioServer.set_bus_mute(master, false)
+	if not _pending_music.is_empty():
+		var track: String = _pending_music
+		_pending_music = ""
+		play_music(track, 0.05)
 
 var audio_unlocked: bool:
 	get:
@@ -127,6 +175,8 @@ var audio_unlocked: bool:
 ## tonal cues (relic/prestige, jitter 0) always play at exactly 1.0. An optional pitch override
 ## lets the combo rattle climb in semitones.
 func play(event: String, pitch_override: float = 0.0) -> void:
+	if OS.has_feature("web") and not _unlocked:
+		return
 	var stream: AudioStream = _streams.get(event, null)
 	if stream == null or _players.is_empty():
 		return
@@ -137,6 +187,7 @@ func play(event: String, pitch_override: float = 0.0) -> void:
 	p.play()
 	_play_count += 1
 	_last_event = event
+	_duck_music()
 
 ## The per-play pitch for an event: 1.0 ± its data-driven jitter (pooled voices reset this each play,
 ## so a jitter-0 cue is exactly tonal). Drawn from the module RNG, NOT the per-tone seeded one.
@@ -156,6 +207,8 @@ var last_event: String:
 		return _last_event
 
 func play_detonate() -> void:
+	if OS.has_feature("web") and not _unlocked:
+		return
 	# Layered boom: fire the data-driven layers (low body + bright transient + noise tail) as one
 	# stacked detonation. Falls back to the single `detonate` tone if no layers are bound.
 	if _detonate_layers.is_empty():
@@ -173,6 +226,7 @@ func play_detonate() -> void:
 		p.play()
 		_play_count += 1
 	_last_event = "detonate"
+	_duck_music()
 
 func play_crack() -> void: play("crack")
 func play_break() -> void: play("break")
@@ -182,6 +236,9 @@ func play_relic_found() -> void: play("relic_found")
 func play_prestige_banked() -> void: play("prestige_banked")
 func play_descend() -> void: play("descend")
 func play_throw() -> void: play("throw")
+func play_charge_select() -> void: play("charge_select")
+func play_upgrade_purchase() -> void: play("upgrade_purchase")
+func play_run_end_jingle() -> void: play("run_end_jingle")
 
 ## The ASCENDING base-pitch sequence a `cleared_count`-cell break rattle resolves to: up to
 ## combo.max_voices voices, the i-th climbing i * combo.semitone_step semitones (1.0594 = 2^(1/12)).
@@ -219,6 +276,8 @@ func play_break_combo(cleared_count: int) -> void:
 ## Play one combo-rattle voice: a `break` tone at `base_pitch`, with the break event's own jitter
 ## layered on top of the semitone climb so successive voices both ascend AND vary.
 func _play_combo_voice(base_pitch: float) -> void:
+	if OS.has_feature("web") and not _unlocked:
+		return
 	var stream: AudioStream = _streams.get("break", null)
 	if stream == null or _players.is_empty():
 		return
@@ -231,6 +290,7 @@ func _play_combo_voice(base_pitch: float) -> void:
 	p.play()
 	_play_count += 1
 	_last_event = "break"
+	_duck_music()
 
 ## The stream bound to an event (for tests/inspection), or null if none.
 func stream_for(event: String) -> AudioStream:
@@ -266,6 +326,87 @@ func set_master_volume_db(db: float) -> void:
 	if idx >= 0:
 		AudioServer.set_bus_volume_db(idx, db)
 
+# ── Music playback (AC-5.13.2 Music bus; placeholder loops) ───────────────────
+
+func play_music(track: String, fade_seconds: float = 0.65) -> void:
+	if OS.has_feature("web") and not _unlocked:
+		_pending_music = track
+		return
+	var stream: AudioStream = _music_streams.get(track, null)
+	if stream == null or _music_players.is_empty():
+		return
+	if _current_music == track and _music_players[_music_voice].playing:
+		return
+	if _music_tween != null and _music_tween.is_valid():
+		_music_tween.kill()
+	var next_index: int = 1 - _music_voice
+	var next: AudioStreamPlayer = _music_players[next_index]
+	var prev: AudioStreamPlayer = _music_players[_music_voice]
+	next.stream = stream
+	next.volume_db = MUSIC_FADE_DB
+	next.play()
+	var target_db: float = _music_volume_db(track)
+	_music_tween = create_tween().set_parallel(true)
+	_music_tween.tween_property(next, "volume_db", target_db, maxf(0.01, fade_seconds)) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if prev.playing:
+		_music_tween.tween_property(prev, "volume_db", MUSIC_FADE_DB, maxf(0.01, fade_seconds)) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_music_tween.chain().tween_callback(prev.stop)
+	_music_voice = next_index
+	_current_music = track
+
+func stop_music(fade_seconds: float = 0.35) -> void:
+	if _music_players.is_empty():
+		return
+	if _music_tween != null and _music_tween.is_valid():
+		_music_tween.kill()
+	_music_tween = create_tween().set_parallel(true)
+	for p in _music_players:
+		if p.playing:
+			_music_tween.tween_property(p, "volume_db", MUSIC_FADE_DB, maxf(0.01, fade_seconds))
+	_music_tween.chain().tween_callback(func() -> void:
+		for p in _music_players:
+			p.stop()
+		_current_music = ""
+	)
+
+func current_music() -> String:
+	return _current_music
+
+func music_stream_for(track: String) -> AudioStream:
+	return _music_streams.get(track, null)
+
+func _music_volume_db(track: String) -> float:
+	var spec: Dictionary = _music_specs.get(track, FALLBACK_MUSIC.get(track, {"volume": 0.12}))
+	var v: float = clampf(float(spec.get("volume", 0.12)), 0.0, 1.0)
+	return linear_to_db(maxf(0.001, v))
+
+func _duck_music() -> void:
+	if _music_players.is_empty() or _current_music.is_empty():
+		return
+	if _duck_tween != null and _duck_tween.is_valid():
+		_duck_tween.kill()
+	var active: AudioStreamPlayer = _music_players[_music_voice]
+	if not active.playing:
+		return
+	var target: float = _music_volume_db(_current_music)
+	_duck_tween = create_tween()
+	_duck_tween.tween_property(active, "volume_db", target - 5.0, 0.035)
+	_duck_tween.tween_interval(0.12)
+	_duck_tween.tween_property(active, "volume_db", target, 0.18)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		_set_music_focus_muted(true)
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_set_music_focus_muted(false)
+
+func _set_music_focus_muted(muted: bool) -> void:
+	var idx: int = AudioServer.get_bus_index(MUSIC_BUS)
+	if idx >= 0:
+		AudioServer.set_bus_mute(idx, muted)
+
 # ── Placeholder SFX synthesis (data-driven; no binary assets, no deps) ─────────
 
 ## Build the per-event streams + pitch-jitter table + the layered-boom voices from data/audio.json
@@ -296,6 +437,19 @@ func _build_streams() -> void:
 			float(ld.get("noise", 0.5)), float(ld.get("sweep", 0.0))
 		)
 		_detonate_layers.append({"stream": stream, "pitch_jitter": float(ld.get("pitch_jitter", 0.0))})
+	_build_music_streams()
+
+func _build_music_streams() -> void:
+	_music_streams.clear()
+	_music_specs.clear()
+	var music_data: Variant = _audio_subtable("music")
+	var md: Dictionary = music_data if music_data is Dictionary else {}
+	for track in MUSIC_TRACKS:
+		var spec: Dictionary = md.get(track, FALLBACK_MUSIC.get(track, {}))
+		if spec.is_empty():
+			continue
+		_music_specs[track] = spec.duplicate(true)
+		_music_streams[track] = _make_music_loop(spec)
 
 ## The `events` sub-object from data/audio.json, or {} if GameData/the table is unavailable. Each
 ## caller then falls back per-event so a partial table is still safe.
@@ -342,4 +496,39 @@ func _make_tone(freq: float, duration: float, noise_mix: float, sweep_hz: float 
 	wav.mix_rate = MIX_RATE
 	wav.stereo = false
 	wav.data = data
+	return wav
+
+func _make_music_loop(spec: Dictionary) -> AudioStreamWAV:
+	var notes: Array = spec.get("notes", [])
+	if notes.is_empty():
+		notes = [220.0, 0.0, 277.18, 0.0]
+	var bpm: float = maxf(1.0, float(spec.get("bpm", 120.0)))
+	var step_beats: float = maxf(0.01, float(spec.get("step_beats", 0.5)))
+	var step_seconds: float = 60.0 / bpm * step_beats
+	var count: int = maxi(1, int(float(MIX_RATE) * step_seconds * float(notes.size())))
+	var data := PackedByteArray()
+	data.resize(count * 2)
+	var phase: float = 0.0
+	for i in range(count):
+		var t: float = float(i) / float(MIX_RATE)
+		var step: int = mini(notes.size() - 1, int(floor(t / step_seconds)))
+		var freq: float = float(notes[step])
+		var sample: float = 0.0
+		if freq > 0.0:
+			var local_t: float = fmod(t, step_seconds) / step_seconds
+			var env: float = minf(1.0, local_t * 18.0) * pow(maxf(0.0, 1.0 - local_t), 0.35)
+			var square: float = 1.0 if sin(phase) >= 0.0 else -1.0
+			var octave: float = 1.0 if sin(phase * 2.0) >= 0.0 else -1.0
+			sample = (square * 0.65 + octave * 0.25) * env * 0.25
+			phase += TAU * freq / float(MIX_RATE)
+		var v: int = clampi(int(sample * 32767.0), -32768, 32767)
+		data.encode_s16(i * 2, v)
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.mix_rate = MIX_RATE
+	wav.stereo = false
+	wav.data = data
+	wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	wav.loop_begin = 0
+	wav.loop_end = count
 	return wav

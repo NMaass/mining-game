@@ -32,9 +32,11 @@ func test_block_returns_expected_fields() -> void:
 	assert_int(int(dirt.get("palette_index", -1))).is_equal(3)
 
 func test_block_ore_value() -> void:
-	# AC-5.1.5: ore blocks carry a value
-	assert_int(Registry.block_ore_value(_tables, "ore_copper")).is_equal(12)
-	assert_int(Registry.block_ore_value(_tables, "ore_gold")).is_equal(30)
+	# AC-5.1.5: ore blocks carry a value. Unit economy: rock is a $5 ore (plain stone is
+	# worth a little), copper is the prominent $10 tier, gold is the $90 tier.
+	assert_int(Registry.block_ore_value(_tables, "rock")).is_equal(5)
+	assert_int(Registry.block_ore_value(_tables, "ore_copper")).is_equal(10)
+	assert_int(Registry.block_ore_value(_tables, "ore_gold")).is_equal(90)
 	assert_int(Registry.block_ore_value(_tables, "dirt")).is_equal(0)
 	assert_int(Registry.block_ore_value(_tables, "air")).is_equal(0)
 
@@ -86,8 +88,8 @@ func test_depth_weights_at_cap_equal_cap_anchor() -> void:
 		assert_float(float(w.get(id, 0.0))).override_failure_message(
 			"cap weight for '%s' should equal the anchor" % id
 		).is_equal_approx(float(anchor[id]), 0.0001)
-	# A surface-only block (dirt) has faded to zero at the cap.
-	assert_bool(w.has("dirt")).is_false()
+	# Dirt remains as rare filler at the cap because the cap anchor includes a small weight.
+	assert_float(float(w.get("dirt", 0.0))).is_equal_approx(float(anchor.get("dirt", 0.0)), 0.0001)
 
 func test_depth_weights_frozen_below_cap() -> void:
 	# AC-5.5.2 (bounded): weights are identical at the cap and far below it (the clamp).
@@ -113,9 +115,10 @@ func test_band_odds_sum_to_one() -> void:
 
 func test_band_odds_deep_are_more_lucrative() -> void:
 	# AC-5.8.8 / AC-5.5.2: deeper depths show higher gem/gold odds.
-	var surface: Dictionary = Registry.depth_odds_at(_tables, 10)
-	var deep: Dictionary = Registry.depth_odds_at(_tables, 300)
+	var surface: Dictionary = Registry.full_odds_at(_tables, 10)
+	var deep: Dictionary = Registry.full_odds_at(_tables, Registry.cap_depth_cells(_tables))
 	assert_float(float(deep.get("ore_gold", 0.0))).is_greater(float(surface.get("ore_gold", 0.0)))
+	assert_float(float(deep.get("diamond", 0.0))).is_greater(float(surface.get("diamond", 0.0)))
 
 func test_band_odds_nonempty_far_below_in_infinite_shaft() -> void:
 	# UNIT MAPGEN: the shaft is infinite — there is no "outside the mine". Far below the cap,
@@ -189,16 +192,16 @@ func test_free_charge_id() -> void:
 
 func test_balance_values() -> void:
 	# AC-5.5.4: values from data
-	assert_int(Registry.mine_width_cells(_tables)).is_equal(400)
+	assert_int(Registry.mine_width_cells(_tables)).is_equal(64)
 	# UNIT MAPGEN: mine_height_cells 0 = the infinite-descent sentinel (no bottom).
 	assert_int(Registry.mine_height_cells(_tables)).is_equal(0)
 	assert_bool(Registry.is_infinite_depth(_tables)).is_true()
 	assert_int(Registry.mine_bottom_row(_tables)).is_equal(Registry.INFINITE_BOTTOM_ROW)
 	assert_int(Registry.shaft_width(_tables)).is_equal(9)
-	assert_int(Registry.shaft_left_cell(_tables)).is_equal(195)
+	assert_int(Registry.shaft_left_cell(_tables)).is_equal(27)
 	assert_int(Registry.chunk_height(_tables)).is_equal(16)
 	assert_int(Registry.block_pixel_size(_tables)).is_equal(16)
-	assert_int(Registry.starting_money(_tables)).is_equal(50)
+	assert_int(Registry.starting_money(_tables)).is_equal(60)
 	assert_int(Registry.run_seed(_tables)).is_equal(1337)
 	assert_int(Registry.crack_stages(_tables)).is_equal(3)
 	assert_float(Registry.camera_zoom(_tables)).is_equal(2.2)

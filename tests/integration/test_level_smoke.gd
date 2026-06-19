@@ -70,6 +70,18 @@ func _softest_solid_cell(grid: BlockGrid) -> Vector2i:
 						best = Vector2i(x, y)
 	return best
 
+## Break the full 2x2 relic stamp. The relic offer fires only after the last footprint
+## cell breaks, matching the production latch in BlockGrid.
+func _break_relic_footprint(grid: BlockGrid) -> void:
+	var relic := grid.relic_cell
+	assert_int(relic.y).is_greater_equal(0)
+	for dy in range(2):
+		grid.ensure_chunk(grid.cell_to_chunk(relic.y + dy))
+	for dy in range(2):
+		for dx in range(2):
+			var cell := relic + Vector2i(dx, dy)
+			grid.damage(cell.x, cell.y, 1 << 30)
+
 ## Amount of the most-recently-spawned explosion's spark layer, or -1 if none. The explosion is
 ## now a LAYERED Node2D (ExplosionFx) with the GPUParticles2D spark as a CHILD, so the search is
 ## RECURSIVE (v0.5 arcade pass re-root; the non-recursive find_children would miss it).
@@ -106,8 +118,8 @@ func test_authored_scene_nodes_present() -> void:
 	assert_object(mine.get_node_or_null("LightMaskLayer/LightMask")).is_not_null()
 	assert_object(mine.get_node_or_null("Platform")).is_not_null()
 	assert_object(mine.get_node_or_null("AimPreview")).is_not_null()
-	assert_object(mine.get_node_or_null("Hud/Bottom/TrayScroll/Tray")).is_not_null()
-	assert_object(mine.get_node_or_null("Hud/Bottom/ThrowButton")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/Bottom/SelectorBar/TrayScroll/Tray")).is_not_null()
+	assert_object(mine.get_node_or_null("Hud/Bottom/ActionRow/ThrowButton")).is_not_null()
 	assert_object(mine.get_node_or_null("Hud/DigEndPanel")).is_not_null()
 	# AC-5.6.2: the prestige-offer overlay is authored with accept/decline buttons.
 	assert_object(mine.get_node_or_null("PrestigeOffer")).is_not_null()
@@ -374,9 +386,7 @@ func test_mine_select_unlock_and_enter_deep_mine_then_returns_home() -> void:
 	# End the deep dig (collect the relic → accept → bank prestige) and start the next dig: the
 	# controller returns to the home mine for both the active grid and the selection.
 	var grid: BlockGrid = mine.grid
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
-	grid.damage(relic.x, relic.y, 1 << 30)
+	_break_relic_footprint(grid)
 	_accept_relic_offer(mine)
 	mine._on_panel_next_dig()  # start the next dig from the dig-end panel
 
@@ -442,13 +452,13 @@ func test_interactive_controls_meet_touch_target() -> void:
 	var mine := _boot_mine()
 	var min_touch: float = Registry.ui_min_touch_target_px(_tables)
 	assert_float(min_touch).is_greater_equal(44.0)  # the data value is itself sane
-	for path in ["Hud/TopRight/NavButton", "Hud/Bottom/ThrowButton", "Hud/Bottom/BuyPackButton"]:
+	for path in ["Hud/TopRight/NavButton", "Hud/Bottom/ActionRow/ThrowButton", "Hud/Bottom/ActionRow/BuyPackButton"]:
 		var b := mine.get_node(path) as Control
 		assert_bool(UiLayout.meets_touch_target(b.custom_minimum_size, min_touch)).override_failure_message(
 			"%s custom_minimum_size %s below touch target %s" % [path, str(b.custom_minimum_size), str(min_touch)]
 		).is_true()
 	# The tray rebuilt at boot with the free charge; its slot button meets the target too.
-	var tray := mine.get_node("Hud/Bottom/TrayScroll/Tray") as Control
+	var tray := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray") as Control
 	assert_int(tray.get_child_count()).is_greater(0)
 	var slot := tray.get_child(0) as Control
 	assert_bool(UiLayout.meets_touch_target(slot.custom_minimum_size, min_touch)).is_true()
@@ -458,13 +468,13 @@ func test_tray_scrolls_instead_of_overflowing_bottom_bar() -> void:
 	# touch target or pushing the throw button off-screen. The tray lives in a horizontal
 	# ScrollContainer (h-scroll enabled, v-scroll disabled) — the mechanism that bounds its width.
 	var mine := _boot_mine()
-	var scroll := mine.get_node("Hud/Bottom/TrayScroll") as ScrollContainer
+	var scroll := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll") as ScrollContainer
 	assert_object(scroll).is_not_null()
 	assert_int(scroll.horizontal_scroll_mode).is_not_equal(ScrollContainer.SCROLL_MODE_DISABLED)
 	assert_int(scroll.vertical_scroll_mode).is_equal(ScrollContainer.SCROLL_MODE_DISABLED)
 	# Fill the tray with more slots than fit; each keeps its full touch-target size (no shrink),
 	# and the throw button — a sibling of the scroll, not the tray — is unaffected.
-	var tray := mine.get_node("Hud/Bottom/TrayScroll/Tray") as TrayUi
+	var tray := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray") as TrayUi
 	var many: Array = []
 	for i in range(12):
 		many.append({"id": "dynamite", "count": i + 1})
@@ -663,9 +673,13 @@ func test_default_straight_down_throw_enters_open_shaft() -> void:
 	var shaft_w: int = Registry.shaft_width(_tables)
 	var bps: int = Registry.block_pixel_size(_tables)
 
-	# Carve an open shaft column deep enough for the charge to fall through.
+	# Carve an open shaft column deep enough for the charge to fall through. The muzzle now
+	# sits at the CENTER of the standing block (the platform's target row, row 0) — the launch
+	# point is the block the character stands on, not one cell below — so the "otherwise open
+	# shaft" must include row 0 for the straight-down throw to fall freely (the player would have
+	# dug it). Carve from row 0 down.
 	var clear_depth_cells: int = 8
-	for y in range(1, clear_depth_cells + 1):
+	for y in range(0, clear_depth_cells + 1):
 		for x in range(shaft_left, shaft_left + shaft_w):
 			if grid.is_solid(x, y):
 				grid.damage(x, y, grid.get_hp(x, y))
@@ -730,13 +744,10 @@ func test_relic_break_offers_prestige_and_accept_ends_dig() -> void:
 	# point, ends the dig, and shows the distinct dig-end panel (AC-5.8.4).
 	var mine := _boot_mine()
 	var grid: BlockGrid = mine.grid
-	var relic := grid.relic_cell
-	assert_int(relic.y).is_greater_equal(0)  # the mine has a relic
 
-	# Ensure the relic's chunk is loaded, then break the relic cell (fires the signal).
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
+	# Ensure the full relic stamp is broken (fires the signal on the last cell).
 	var before_prestige: int = mine.run_state.total_prestige
-	grid.damage(relic.x, relic.y, 1 << 30)  # overkill → break
+	_break_relic_footprint(grid)
 
 	# The offer overlay is shown; the dig has NOT automatically ended.
 	assert_bool(mine.run_state.relic_collected).is_true()
@@ -760,10 +771,8 @@ func test_relic_break_can_be_declined_to_keep_digging() -> void:
 	# AC-5.6.2: declining the prestige offer resumes the current dig without banking prestige.
 	var mine := _boot_mine()
 	var grid: BlockGrid = mine.grid
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
 	var before_prestige: int = mine.run_state.total_prestige
-	grid.damage(relic.x, relic.y, 1 << 30)
+	_break_relic_footprint(grid)
 
 	var offer: PrestigeOffer = mine.get_node_or_null("PrestigeOffer")
 	assert_bool(offer.visible).is_true()
@@ -794,9 +803,7 @@ func test_bought_upgrade_makes_next_dig_stronger() -> void:
 	assert_int(mine.run_state.dig_blast_intensity(base_intensity)).is_equal(base_intensity)
 
 	# Collect the relic (offer → accept → banks prestige), buy the one upgrade, start the next dig.
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
-	grid.damage(relic.x, relic.y, 1 << 30)
+	_break_relic_footprint(grid)
 	_accept_relic_offer(mine)
 	assert_bool(mine.buy_first_upgrade()).is_true()
 	mine._on_panel_next_dig()  # start next dig from the panel
@@ -814,9 +821,7 @@ func test_progress_persists_across_boot() -> void:
 	# so boot 1 starts fresh.
 	var mine1 := _boot_mine()
 	var grid: BlockGrid = mine1.grid
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
-	grid.damage(relic.x, relic.y, 1 << 30)  # relic found → offer shown
+	_break_relic_footprint(grid)  # relic found → offer shown
 	_accept_relic_offer(mine1)  # accept → banks prestige → autosaves
 	var banked: int = mine1.run_state.total_prestige
 	assert_int(banked).is_greater(0)
@@ -865,6 +870,34 @@ func test_nav_button_opens_settings_overlay_and_pauses_mine() -> void:
 	ov.close()
 	assert_bool(ov.is_open()).is_false()
 	assert_bool(get_tree().paused).is_false()
+
+func test_settings_overlay_exposes_runtime_credits_screen() -> void:
+	# AC-5.8.7: Credits/Attributions are reachable in-game and single-sourced from
+	# spec/ATTRIBUTIONS.md.
+	var mine := _boot_mine()
+	mine.hud.nav_pressed.emit()
+	var ov: SettingsOverlay = mine.overlay
+	var btn := ov.get_node("Center/Dialog/Box/Scroll/Content/CreditsButton") as Button
+	var panel := ov.get_node("Center/Dialog/Box/Scroll/Content/CreditsPanel") as PanelContainer
+	var text := panel.get_node("CreditsText") as Label
+	assert_object(btn).is_not_null()
+	assert_bool(panel.visible).is_false()
+	btn.pressed.emit()
+	assert_bool(panel.visible).is_true()
+	assert_str(text.text).contains("Kevin's Mom's House")
+	assert_str(text.text).contains("Runtime placeholder audio and music")
+	ov.close()
+
+func test_settings_overlay_exposes_manual_save_export_import() -> void:
+	# AC-5.11.5: web users can manually export/import saves from the in-game settings modal.
+	var mine := _boot_mine()
+	mine.hud.nav_pressed.emit()
+	var ov: SettingsOverlay = mine.overlay
+	assert_object(ov.save_export_button()).is_not_null()
+	assert_object(ov.save_import_button()).is_not_null()
+	assert_object(ov.save_text()).is_not_null()
+	assert_object(ov.save_warning_label()).is_not_null()
+	ov.close()
 
 func test_overlay_preserves_in_progress_dig_state() -> void:
 	# AC-5.8.3: opening + closing the overlay preserves all in-progress dig state (money, terrain HP,
@@ -933,6 +966,30 @@ func test_settings_persist_across_boot() -> void:
 	assert_float(mine2.settings.sfx_volume).override_failure_message(
 		"settings did not persist across a fresh boot — save/load wiring dead?"
 	).is_equal_approx(0.15, 0.0001)
+
+func test_manual_save_import_from_overlay_restores_durable_state() -> void:
+	# AC-5.11.5: importing an exported save through Settings restores durable prestige + settings.
+	var mine1 := _boot_mine()
+	mine1.run_state.prestige.bank(3)
+	mine1.hud.nav_pressed.emit()
+	mine1.overlay.sfx_slider().value = 0.22
+	var exported_sfx: float = mine1.settings.sfx_volume
+	mine1.overlay.save_export_button().pressed.emit()
+	var exported: String = mine1.overlay.save_text().text
+	assert_str(exported).contains("\"prestige\"")
+	mine1.overlay.close()
+
+	SaveManager.new().clear()
+	var mine2 := _boot_mine()
+	assert_int(mine2.run_state.total_prestige).is_equal(0)
+	mine2.hud.nav_pressed.emit()
+	mine2.overlay.save_text().text = exported
+	mine2.overlay.save_import_button().pressed.emit()
+
+	assert_int(mine2.run_state.total_prestige).is_equal(3)
+	assert_float(mine2.settings.sfx_volume).is_equal_approx(exported_sfx, 0.0001)
+	assert_str(mine2.overlay.save_status_label().text).is_equal("Save imported.")
+	mine2.overlay.close()
 
 # ── Controls: rebindable keys + elevator side (D2, AC-5.10.1 / AC-5.11.1) ─────────
 
@@ -1330,9 +1387,7 @@ func test_relic_break_pop_in_keeps_panel_visible_synchronously() -> void:
 	var mine := _boot_mine()
 	mine.settings.set_motion_intensity(1.0)
 	var grid: BlockGrid = mine.grid
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
-	grid.damage(relic.x, relic.y, 1 << 30)  # relic found → offer shown
+	_break_relic_footprint(grid)  # relic found → offer shown
 	_accept_relic_offer(mine)                # accept → dig-end panel shown (pop-in starts)
 	var panel: DigEndPanel = mine.get_node_or_null("Hud/DigEndPanel")
 	assert_bool(panel.visible).override_failure_message(
@@ -1372,9 +1427,7 @@ func test_relic_break_flash_fires_with_motion_and_is_suppressed_at_zero() -> voi
 		"FlashRect must IGNORE input (a full-screen overlay must never eat taps)"
 	).is_true()
 	var grid: BlockGrid = mine.grid
-	var relic := grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(relic.y))
-	grid.damage(relic.x, relic.y, 1 << 30)
+	_break_relic_footprint(grid)
 	# The flash peaks immediately (then fades over ui_flash_seconds) — read alpha synchronously.
 	assert_float(flash.modulate.a).override_failure_message(
 		"relic-break flash did not raise FlashRect alpha with motion on"
@@ -1387,9 +1440,7 @@ func test_relic_break_flash_fires_with_motion_and_is_suppressed_at_zero() -> voi
 	mine0.settings.set_motion_intensity(0.0)
 	var flash0: ColorRect = mine0.get_node_or_null("Hud/FlashRect")
 	var grid0: BlockGrid = mine0.grid
-	var relic0 := grid0.relic_cell
-	grid0.ensure_chunk(grid0.cell_to_chunk(relic0.y))
-	grid0.damage(relic0.x, relic0.y, 1 << 30)
+	_break_relic_footprint(grid0)
 	assert_float(flash0.modulate.a).override_failure_message(
 		"reduced motion (0) must suppress the relic-break flash (AC-5.10.4)"
 	).is_equal(0.0)
@@ -1399,7 +1450,7 @@ func test_tray_select_pops_in_place_without_rebuilding_the_row() -> void:
 	# row is NOT queue_freed/rebuilt, so the SAME Button instances survive (no flicker). Buy a pack so
 	# there are >= 2 slots, then re-select and assert the button identities are unchanged.
 	var mine := _boot_mine()
-	var tray := mine.get_node("Hud/Bottom/TrayScroll/Tray") as TrayUi
+	var tray := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray") as TrayUi
 	# Ensure a second slot exists: the basic pack costs exactly the starting money, so a boot can
 	# afford one buy. A pack buy is a slot-SET change → a rebuild happens; capture the new buttons.
 	assert_bool(mine.buy_pack("basic")).override_failure_message(
@@ -1429,6 +1480,54 @@ func test_tray_select_pops_in_place_without_rebuilding_the_row() -> void:
 	var free_sb := free_btn.get_theme_stylebox("normal") as StyleBoxFlat
 	assert_int(free_sb.border_width_left).is_greater(1)
 
+func test_selector_does_not_rebuild_or_jump_on_platform_move() -> void:
+	# UNIT SELECTOR (requirement 4): the charge-selector hotbar must NOT rebuild/reflow/jump when the
+	# PLATFORM MOVES (or on a generic refresh). Drive a real elevator move + a generic _refresh_all_ui
+	# and assert the selector's CHILD SET and each slot's POSITION are byte-for-byte unchanged — the
+	# exact defect (the hotbar jumping on platform movement) this unit fixes.
+	var mine := _boot_mine()
+	var tray := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray") as TrayUi
+	# Give the platform room to move down a row.
+	mine.platform.support_row = 6
+	var children_before: Array = tray.get_children().duplicate()
+	var positions_before: Array = []
+	for c: Control in tray.get_children():
+		positions_before.append(c.position)
+	# A platform move (the elevator-down path) followed by the generic UI refresh + the descended hook.
+	mine._on_elevator_down()
+	mine._refresh_all_ui()
+	mine._on_platform_descended(mine.platform.target_row)
+	# SAME button instances (no queue_free/rebuild) AND same positions (no reflow/jump).
+	var children_after := tray.get_children()
+	assert_int(children_after.size()).is_equal(children_before.size())
+	for i in range(children_before.size()):
+		assert_bool(children_after[i] == children_before[i]).override_failure_message(
+			"selector slot %d was REBUILT on a platform move — the hotbar churned (requirement 4)" % i
+		).is_true()
+		assert_vector((children_after[i] as Control).position).override_failure_message(
+			"selector slot %d JUMPED on a platform move — position changed (requirement 4)" % i
+		).is_equal(positions_before[i])
+
+func test_selector_rebuild_signature_skips_rebuild_when_contents_unchanged() -> void:
+	# UNIT SELECTOR (requirement 4 / rebuild-signature): _push_tray rebuilds ONLY when the SLOT SET
+	# (the {id:count} signature) changes; an unchanged-content push keeps the SAME Button instances.
+	# Pushing the tray twice with no intervening state change must not rebuild the row.
+	var mine := _boot_mine()
+	var tray := mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray") as TrayUi
+	var before: Array = tray.get_children().duplicate()
+	# Two extra pushes with NO state change → signature identical → no rebuild.
+	mine._push_tray()
+	mine._push_tray()
+	var after := tray.get_children()
+	assert_int(after.size()).is_equal(before.size())
+	for i in range(before.size()):
+		assert_bool(after[i] == before[i]).override_failure_message(
+			"selector rebuilt on an unchanged-content push (slot %d instance changed) — signature gate regressed" % i
+		).is_true()
+	# A pack buy DOES change the slot set → a rebuild is expected (signature differs).
+	if mine.buy_pack("basic"):
+		assert_int(tray.get_children().size()).is_greater(before.size())
+
 func test_depth_bump_callable_without_crash() -> void:
 	# v0.5 arcade pass: a descent bumps the depth chip (presentation). bump_depth must be a safe no-op
 	# wherever the label exists; assert it runs and leaves the label resting (scale settles to ~1 on the
@@ -1446,8 +1545,8 @@ func test_throw_starts_cooldown_and_disables_button() -> void:
 	# the throw button is disabled and the cooldown label shows a countdown.
 	var mine := _boot_mine()
 	mine.select_charge(Registry.free_charge_id(_tables))
-	var button: Button = mine.get_node("Hud/Bottom/ThrowButton")
-	var label: Label = mine.get_node("Hud/Bottom/ThrowButton/CooldownLabel")
+	var button: Button = mine.get_node("Hud/Bottom/ActionRow/ThrowButton")
+	var label: Label = mine.get_node("Hud/Bottom/ActionRow/ThrowButton/CooldownLabel")
 	assert_bool(button.disabled).is_false()  # ready before throw
 
 	var charge: Charge = mine.throw_at(0.0)
@@ -1462,7 +1561,7 @@ func test_cooldown_expires_and_re_enables_button() -> void:
 	# v0.5: advancing the cooldown (or waiting it out) re-enables the throw button.
 	var mine := _boot_mine()
 	mine.select_charge(Registry.free_charge_id(_tables))
-	var button: Button = mine.get_node("Hud/Bottom/ThrowButton")
+	var button: Button = mine.get_node("Hud/Bottom/ActionRow/ThrowButton")
 	var charge: Charge = mine.throw_at(0.0)
 	assert_object(charge).is_not_null()
 	assert_bool(button.disabled).is_true()
@@ -1487,8 +1586,8 @@ func test_cooldown_visual_drains_to_completion_independent_of_detonation() -> vo
 	# any detonation event — the in-flight charge never impacts, yet the cooldown still finishes.
 	var mine := _boot_mine()
 	mine.select_charge(Registry.free_charge_id(_tables))
-	var fill: ColorRect = mine.get_node("Hud/Bottom/ThrowButton/CooldownFill")
-	var label: Label = mine.get_node("Hud/Bottom/ThrowButton/CooldownLabel")
+	var fill: ColorRect = mine.get_node("Hud/Bottom/ActionRow/ThrowButton/CooldownFill")
+	var label: Label = mine.get_node("Hud/Bottom/ActionRow/ThrowButton/CooldownLabel")
 
 	_detonations_seen = 0
 	var charge: Charge = mine.throw_at(0.0)
@@ -1498,6 +1597,8 @@ func test_cooldown_visual_drains_to_completion_independent_of_detonation() -> vo
 
 	# Right after release the cooldown is live: the drain band is visible and the label counts down.
 	assert_bool(fill.visible).is_true()
+	assert_float(fill.anchor_left).is_equal(0.0)
+	assert_float(fill.anchor_right).is_equal(0.0)
 	assert_str(label.text).is_not_empty()
 	var first_height: float = fill.size.y
 	assert_float(first_height).is_greater(0.0)
@@ -1570,9 +1671,9 @@ func test_shop_modal_is_authored_and_lists_packs() -> void:
 	assert_bool(get_tree().paused).is_false()
 
 func test_shop_buy_affordable_pack_grants_charges_and_rejects_unaffordable() -> void:
-	# Starting money (50) is exactly the basic pack price, so it is affordable; the
-	# heavy crate (260) is not. Buying the affordable pack grants finite charges,
-	# plays the pack-open cue, and closes the modal.
+	# Starting money can afford the basic pack; the heavy crate (260) is not. Buying
+	# the affordable pack grants finite charges, plays the pack-open cue, shows the
+	# crate reveal, then closes the modal after the reveal settles.
 	var mine := _boot_mine()
 	var shop: ShopModal = mine.get_node_or_null("ShopModal")
 	mine._on_buy_pack_button()
@@ -1585,18 +1686,43 @@ func test_shop_buy_affordable_pack_grants_charges_and_rejects_unaffordable() -> 
 	var money_before: int = mine.economy.money
 	var finite_before: int = mine.run_state.finite_count()
 	var audio_before: int = Audio.play_count
+	var reveal: CrateReveal = shop.get_node("CrateReveal")
+	var monitor := monitor_signals(reveal)
 
 	basic_btn.pressed.emit()
 
 	assert_int(mine.economy.money).is_equal(money_before - 50)
 	assert_int(mine.run_state.finite_count()).is_greater(finite_before)
+	assert_int(mine.run_state.last_pack_result().size()).is_greater(0)
 	assert_int(Audio.play_count).is_greater(audio_before)  # pack_open cue fired
+	assert_bool(shop.visible).is_true()
+	await assert_signal(monitor).is_emitted("finished")
 	assert_bool(shop.visible).is_false()
 	assert_bool(get_tree().paused).is_false()
 
-	# With 0 money left, buying the heavy crate is rejected and money stays 0.
+	# With the remaining money below the heavy price, buying the heavy crate is rejected.
+	var money_after_basic: int = mine.economy.money
 	assert_bool(mine.buy_pack("heavy_crate")).is_false()
-	assert_int(mine.economy.money).is_equal(0)
+	assert_int(mine.economy.money).is_equal(money_after_basic)
+
+func test_tray_slot_index_selection_supports_hotkey_path() -> void:
+	# AC-5.3.6 / AC-5.3.7 / AC-5.8.2: 1-9 hotkeys resolve to visible tray slots, but owned
+	# checks still route through RunState.select so locked slots cannot be selected.
+	var mine := _boot_mine()
+	assert_bool(mine.buy_pack("basic")).is_true()
+	var granted: Array = mine.run_state.last_pack_result()
+	assert_int(granted.size()).is_greater(0)
+	var tray: TrayUi = mine.get_node("Hud/Bottom/SelectorBar/TrayScroll/Tray")
+	var ids: Array = tray.slot_ids()
+	var owned_id := str(granted[0])
+	var index: int = ids.find(owned_id)
+	assert_int(index).is_greater_equal(0)
+	assert_bool(mine.select_tray_slot_index(index)).is_true()
+	assert_str(mine.run_state.selected_id).is_equal(owned_id)
+
+	var locked_index: int = ids.find("pile_driver")
+	if locked_index >= 0 and mine.run_state.count_of("pile_driver") <= 0:
+		assert_bool(mine.select_tray_slot_index(locked_index)).is_false()
 
 # ── Elevator controls (Wave 4: manual platform movement) ───────────────────────
 
@@ -1658,3 +1784,105 @@ func test_elevator_buttons_hidden_at_top_and_bottom_limits() -> void:
 	assert_int(mine.platform.target_row).is_equal(bottom)
 	assert_bool(up.visible).is_true()
 	assert_bool(down.visible).is_false()
+
+# ── MineSelect pay-gate UI (TEST-01: free-enter risk) ─────────────────────────
+
+func test_mine_select_modal_unlock_flips_button_and_emits_correct_signal() -> void:
+	# The UI's routing IS the pay-gate contract: a locked mine's button must emit unlock_pressed
+	# (which the controller routes through economy.debit), not enter_pressed. If _on_action inverted
+	# those emits, or refresh() stopped flipping UNLOCK→ENTER, or the affordability gate broke, no
+	# test would catch it — the player could enter a money-gated mine for free.
+	var mine := _boot_mine()
+	var ms: MineSelect = mine._mine_select
+	assert_object(ms).is_not_null()
+	ms.open(0.0)  # reduced-motion: no tween
+	assert_bool(ms.visible).is_true()
+	var deep_btn: Button = ms._buttons.get("deep", null)
+	assert_object(deep_btn).is_not_null()
+	var cost: int = Registry.mine_access_cost(_tables, "deep")
+	assert_int(cost).is_greater(0)
+	# Broke: button reads UNLOCK $cost and is disabled.
+	assert_str(deep_btn.text).is_equal("UNLOCK $%d" % cost)
+	assert_bool(deep_btn.disabled).is_true()
+	# Fund the player so the button enables.
+	var per_gold: int = Registry.block_ore_value(_tables, "ore_gold")
+	for i in range(int(ceil(float(cost) / float(per_gold))) + 1):
+		mine.economy.credit(Vector2i(-300 - i, -300), "ore_gold")
+	ms.refresh()
+	assert_bool(deep_btn.disabled).is_false()
+	# Simulate the button press: _on_action routes locked → unlock_pressed (not enter_pressed).
+	var monitor := monitor_signals(ms)
+	ms._on_action("deep")
+	assert_signal(monitor).is_emitted("unlock_pressed", ["deep"])
+	# The controller unlocks the mine; refresh flips the button to ENTER.
+	assert_bool(mine.unlock_mine("deep")).is_true()
+	ms.refresh()
+	assert_str(deep_btn.text).is_equal("ENTER")
+	assert_bool(deep_btn.disabled).is_false()
+	# Now _on_action routes unlocked → enter_pressed (not unlock_pressed).
+	var monitor2 := monitor_signals(ms)
+	ms._on_action("deep")
+	assert_signal(monitor2).is_emitted("enter_pressed", ["deep"])
+	# Close emits `closed`.
+	var monitor3 := monitor_signals(ms)
+	ms.close()
+	assert_signal(monitor3).is_emitted("closed")
+	assert_bool(ms.visible).is_false()
+
+# ── DigEndPanel text content + refresh_power (TEST-04: explained state) ──────
+
+func test_dig_end_panel_text_content_and_refresh_power() -> void:
+	# AC-5.8.4: the dig-end panel EXPLAINS the state — relic found, prestige banked, power gained.
+	# Asserts the actual text content (not just node existence) and that refresh_power updates it.
+	var mine := _boot_mine()
+	var grid: BlockGrid = mine.grid
+	_break_relic_footprint(grid)
+	_accept_relic_offer(mine)
+	var panel: DigEndPanel = mine.get_node_or_null("Hud/DigEndPanel")
+	assert_object(panel).is_not_null()
+	assert_bool(panel.visible).is_true()
+	# The panel explains the relic → prestige → power loop.
+	var title: Label = panel.get_node_or_null("Box/Title")
+	var banked: Label = panel.get_node_or_null("Box/Banked")
+	var power: Label = panel.get_node_or_null("Box/Power")
+	assert_object(title).is_not_null()
+	assert_object(banked).is_not_null()
+	assert_object(power).is_not_null()
+	assert_str(title.text).is_equal("Relic recovered!")
+	assert_str(banked.text).contains("+")
+	assert_str(banked.text).contains("Prestige banked")
+	assert_str(power.text).contains("x")
+	assert_str(power.text).contains("Blast power")
+	# After buying the upgrade, refresh_power updates the readout.
+	var power_before: String = power.text
+	assert_bool(mine.buy_first_upgrade()).is_true()
+	panel.refresh_power(mine.run_state.total_prestige, mine.run_state.prestige.blast_intensity_mult())
+	assert_str(banked.text).contains("Prestige available")
+	assert_str(power.text).contains("x")
+	assert_bool(power.text != power_before).is_true()
+
+# ── CrateReveal animated + reduced-motion paths (TEST-02) ────────────────────
+
+func test_crate_reveal_rarity_routing_and_reduced_motion() -> void:
+	# CrateReveal: a rare result triggers hit-stop + particles; reduced-motion shows a caption
+	# with no particles. The `finished` signal fires in both modes.
+	var mine := _boot_mine()
+	var shop: ShopModal = mine.get_node_or_null("ShopModal")
+	assert_object(shop).is_not_null()
+	var reveal: CrateReveal = shop.get_node_or_null("CrateReveal")
+	assert_object(reveal).is_not_null()
+	# Unit-test the pure rarity router: a mixed common+rare pick yields a valid rarity.
+	var best: String = CrateReveal.best_rarity_from_tables(_tables, ["dynamite", "heavy_bomb"])
+	assert_bool(best == "common" or best == "rare" or best == "uncommon").is_true()
+	# Reduced-motion path: no particles, caption shown, finished fires.
+	reveal.configure(_tables)
+	var reveal_monitor := monitor_signals(reveal)
+	reveal.show_pack("basic", ["dynamite"], 0.0)  # motion=0 → reduced-motion path
+	assert_bool(reveal.visible).is_true()
+	# The caption label should have non-empty text.
+	var caption: Label = reveal.get_node_or_null("Panel/Box/Caption")
+	if caption != null:
+		assert_bool(caption.text.length() > 0).is_true()
+	# Wait for finished (the reduced-motion path fires it on a timer).
+	await assert_signal(reveal_monitor).is_emitted("finished")
+	assert_float(Engine.time_scale).is_equal(1.0)  # no hit-stop stuck on in reduced-motion

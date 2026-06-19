@@ -27,6 +27,18 @@ func _load_real_tables() -> Dictionary:
 func _make_grid(mine_hardness_mult: float = 1.0) -> BlockGrid:
 	return BlockGridScript.new(_tables, Registry.run_seed(_tables), mine_hardness_mult)
 
+func _relic_footprint() -> Array:
+	return BlockGen.relic_footprint(_tables, Registry.run_seed(_tables))
+
+func _prepare_relic_footprint(grid: BlockGrid, hp: int = 10) -> void:
+	for cell: Vector2i in _relic_footprint():
+		grid.ensure_chunk(grid.cell_to_chunk(cell.y))
+		grid.set_hp(cell.x, cell.y, hp)
+
+func _break_relic_footprint(grid: BlockGrid) -> void:
+	for cell: Vector2i in _relic_footprint():
+		grid.damage(cell.x, cell.y, grid.get_hp(cell.x, cell.y))
+
 # ── HP initialization from the SCALED formula (AC-5.2.1) ─────────────────────
 
 func test_hp_initializes_from_scaled_formula() -> void:
@@ -300,24 +312,15 @@ func test_relic_cell_resolves_for_run_seed() -> void:
 	assert_int(rc.y).is_greater_equal(0)  # a relic exists for this data set
 
 func test_breaking_relic_cell_emits_once() -> void:
-	# AC-5.6.2: destroying the relic's block awards it — emits relic_collected once.
+	# AC-5.6.2: destroying the whole 2x2 relic footprint awards it once.
 	var grid := _make_grid()
 	var rc: Vector2i = grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(rc.y))
-
-	# The relic rides on whatever block the band generated there; ensure it is solid
-	# so it can be broken. (For this data set the relic depth band is diggable.)
-	# Force a solid value if generation produced air at that exact cell, so the break
-	# path is exercised deterministically without depending on the noise outcome.
-	# IMPORTANT: connect the collector AFTER any setup so setup never spuriously fires.
-	if not grid.is_solid(rc.x, rc.y):
-		grid.set_hp(rc.x, rc.y, 10)
+	_prepare_relic_footprint(grid)
 
 	var collector := _SignalCollector.new()
 	grid.relic_collected.connect(collector.on_relic)
 
-	var hp: int = grid.get_hp(rc.x, rc.y)
-	grid.damage(rc.x, rc.y, hp)  # break it
+	_break_relic_footprint(grid)
 
 	assert_int(collector.count).is_equal(1)
 	assert_vector(collector.last_cell).is_equal(rc)
@@ -326,19 +329,16 @@ func test_breaking_relic_cell_emits_once() -> void:
 func test_relic_signal_does_not_refire() -> void:
 	# AC-5.6.2: the relic never recycles — once collected, no further emissions.
 	var grid := _make_grid()
-	var rc: Vector2i = grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(rc.y))
-	if not grid.is_solid(rc.x, rc.y):
-		grid.set_hp(rc.x, rc.y, 10)
+	_prepare_relic_footprint(grid)
 
 	var collector := _SignalCollector.new()
 	grid.relic_collected.connect(collector.on_relic)
 
-	grid.set_hp(rc.x, rc.y, 0)          # break (emit #1)
+	_break_relic_footprint(grid)
 	assert_int(collector.count).is_equal(1)
-	# Re-load the chunk fresh (recycle) and break the cell again — must NOT refire.
-	grid.set_hp(rc.x, rc.y, 5)          # write HP back into the (still resident) cell
-	grid.damage(rc.x, rc.y, 5)          # break again
+	# Write HP back into the still-resident footprint and break it again — must NOT refire.
+	_prepare_relic_footprint(grid, 5)
+	_break_relic_footprint(grid)
 	assert_int(collector.count).is_equal(1)  # still exactly one
 
 func test_non_relic_break_emits_nothing() -> void:
@@ -393,17 +393,18 @@ func test_apply_blast_updates_hp() -> void:
 			assert_int(grid.get_hp(cell.x, cell.y)).is_equal(int(result["new_hp"][cell]))
 
 func test_apply_blast_breaking_relic_emits() -> void:
-	# AC-5.6.2: clearing the relic cell via a blast also fires relic_collected once.
+	# AC-5.6.2: clearing the full relic footprint via a blast fires relic_collected once.
 	var grid := _make_grid()
 	var rc: Vector2i = grid.relic_cell
-	grid.ensure_chunk(grid.cell_to_chunk(rc.y))
-	# Make the relic cell solid + low HP so the blast clears it.
-	grid.set_hp(rc.x, rc.y, 5)
+	# Make every relic footprint cell solid + low HP so the blast clears it.
+	_prepare_relic_footprint(grid, 5)
 	var collector := _SignalCollector.new()
 	grid.relic_collected.connect(collector.on_relic)
 
-	var snap: Dictionary = {rc: grid.get_hp(rc.x, rc.y)}
-	var result: Dictionary = Blast.resolve(snap, rc, 0, 100, [1.0])
+	var snap: Dictionary = {}
+	for cell: Vector2i in _relic_footprint():
+		snap[cell] = grid.get_hp(cell.x, cell.y)
+	var result: Dictionary = Blast.resolve(snap, rc, 2, 100, [1.0, 1.0, 1.0])
 	grid.apply_blast(result)
 	assert_int(collector.count).is_equal(1)
 	assert_vector(collector.last_cell).is_equal(rc)

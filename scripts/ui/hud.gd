@@ -32,9 +32,13 @@ signal elevator_down_pressed
 # the controls. The accessibility-meaningful values (touch target, edge margin) are data.
 const _BAR_PAD := 10.0
 const _NAV_RESERVE := 220.0  # horizontal room kept for the top-right buttons
+## Vertical gap between the selector row and the action row inside the bottom VBox. Presentation
+## spacing (like _BAR_PAD), matching the authored VBoxContainer separation — not game balance.
+const _STACK_GAP := 8.0
 ## Fixed vertical gap (logical px) between the up slot and the down slot. Presentation spacing
 ## (like _BAR_PAD), not game balance — the slot POSITIONS are what must stay fixed.
 const _ELEVATOR_SLOT_GAP := 12.0
+const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
 
 @onready var _top: Control = get_node_or_null("Top")
 @onready var _money_box: Control = get_node_or_null("Top/MoneyBox")
@@ -85,6 +89,7 @@ var _money_pop_tween: Tween = null
 var _flash_tween: Tween = null
 var _relic_pulse_tween: Tween = null
 var _depth_bump_tween: Tween = null
+var _button_motion: float = 1.0
 
 
 func _ready() -> void:
@@ -96,6 +101,10 @@ func _ready() -> void:
 		_elevator_up.pressed.connect(_on_elevator_up_pressed)
 	if _elevator_down != null and not _elevator_down.pressed.is_connected(_on_elevator_down_pressed):
 		_elevator_down.pressed.connect(_on_elevator_down_pressed)
+	for button in [_nav_button, _end_dig_button, _elevator_up, _elevator_down]:
+		if button != null:
+			PIXEL_UI_SCRIPT.apply_button(button, "secondary", 20)
+			PIXEL_UI_SCRIPT.bind_button_feel(button, Callable(self, "_button_motion_value"))
 	# Reflow when the window/viewport resizes (portrait aspect range — AC-5.8.6).
 	var vp := get_viewport()
 	if vp != null and not vp.size_changed.is_connected(apply_layout):
@@ -108,6 +117,14 @@ func configure(tables: Dictionary) -> void:
 	_tables = tables
 	_enforce_touch_targets()
 	apply_layout()
+
+
+func set_button_motion(motion: float) -> void:
+	_button_motion = clampf(motion, 0.0, 1.0)
+
+
+func _button_motion_value() -> float:
+	return _button_motion
 
 
 func _on_nav_pressed() -> void:
@@ -216,14 +233,19 @@ func apply_layout_with(window_px: Vector2i, safe_px: Rect2i, logical: Vector2i) 
 			var down_top: float = btn_h + _ELEVATOR_SLOT_GAP
 			_set_rect(_elevator_down, 0.0, down_top, down_w, down_top + down_h)
 
-	# Bottom control bar (tray + throw + pack), its BOTTOM edge above the bottom inset.
+	# Bottom control area, its BOTTOM edge above the bottom inset. It is now a VBox of TWO stacked
+	# rows (AC-5.8.1): the charge SELECTOR in its own bar on top, then the THROW/SHOP/MINES action
+	# row below — so the selector reads as a dedicated hotbar, not crammed into the button row. The
+	# band height fits both rows + the VBox separation; the selector-row height is data-driven.
 	if _bottom != null:
-		var bottom_h: float = maxf(min_touch, 72.0) + _BAR_PAD
+		var action_h: float = maxf(min_touch, 72.0)
+		var selector_h: float = _selector_bar_height()
+		var bottom_h: float = selector_h + _STACK_GAP + action_h + _BAR_PAD
 		var bottom_edge: float = float(logical.y) - insets["bottom"]
 		_set_rect(_bottom, insets["left"], bottom_edge - bottom_h,
 			float(logical.x) - insets["right"], bottom_edge)
-		# A grounded background behind the bar (reaches the screen edge so the inset gap
-		# reads as part of the bar, not a floating row over the rubble).
+		# A grounded background behind BOTH rows (reaches the screen edge so the inset gap reads as
+		# part of the bar, not a floating row over the rubble).
 		if _bottom_bg != null:
 			_set_rect(_bottom_bg, 0.0, bottom_edge - bottom_h - _BAR_PAD,
 				float(logical.x), float(logical.y))
@@ -255,6 +277,15 @@ func _min_touch() -> float:
 		return 48.0
 	var v: float = Registry.ui_min_touch_target_px(_tables)
 	return v if v > 0.0 else 48.0
+
+
+## Height of the dedicated charge-selector row (data-driven; AC-5.8.1). Floors at the touch target
+## so the hotbar never collapses a slot below the thumb-safe minimum even on a tiny /data value.
+func _selector_bar_height() -> float:
+	if _tables.is_empty():
+		return maxf(88.0, _min_touch())
+	var v: float = Registry.ui_selector_f(_tables, "selector_bar_height_px", 88.0)
+	return maxf(v, _min_touch())
 
 
 ## The authored minimum size of an elevator button (its custom_minimum_size). Used to size the two

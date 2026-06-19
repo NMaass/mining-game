@@ -15,6 +15,8 @@ signal buy_upgrade_pressed
 ## Emitted when the player starts the next dig from the panel.
 signal next_dig_pressed
 
+const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
+
 @onready var _title: Label = get_node_or_null("Box/Title")
 @onready var _banked: Label = get_node_or_null("Box/Banked")
 @onready var _power: Label = get_node_or_null("Box/Power")
@@ -28,6 +30,7 @@ signal next_dig_pressed
 var _tables: Dictionary = {}
 ## Live tween handle so a re-show kills a prior in/out tween (no compounding scale / stuck alpha).
 var _tween: Tween = null
+var _motion: float = 1.0
 
 
 func _ready() -> void:
@@ -38,6 +41,11 @@ func _ready() -> void:
 		_buy_button.pressed.connect(_on_buy)
 	if _next_button != null and not _next_button.pressed.is_connected(_on_next):
 		_next_button.pressed.connect(_on_next)
+	PIXEL_UI_SCRIPT.apply_panel(self)
+	PIXEL_UI_SCRIPT.apply_button(_buy_button, "primary", 20)
+	PIXEL_UI_SCRIPT.apply_button(_next_button, "secondary", 20)
+	PIXEL_UI_SCRIPT.bind_button_feel(_buy_button, Callable(self, "_motion_value"))
+	PIXEL_UI_SCRIPT.bind_button_feel(_next_button, Callable(self, "_motion_value"))
 
 
 ## Provide the data tables (the scale-in/out durations are /data tunables). Idempotent.
@@ -52,10 +60,12 @@ func _in_seconds() -> float:
 
 
 func _on_buy() -> void:
+	Audio.notify_user_gesture()
 	buy_upgrade_pressed.emit()
 
 
 func _on_next() -> void:
+	Audio.notify_user_gesture()
 	next_dig_pressed.emit()
 
 
@@ -68,6 +78,7 @@ func _on_next() -> void:
 ## SYNCHRONOUSLY at the start so the smoke test (reads panel.visible right after) stays green; the
 ## animation only drives transform/alpha. At motion ~0 (reduced motion) it snaps with no tween.
 func show_dig_end(banked: int, total: int, power_mult: float, motion: float = 1.0) -> void:
+	_motion = clampf(motion, 0.0, 1.0)
 	if _title != null:
 		_title.text = "Relic recovered!"
 	if _banked != null:
@@ -127,3 +138,8 @@ func hide_panel() -> void:
 	modulate = Color(1, 1, 1, 1)
 	if _backdrop != null:
 		_backdrop.visible = false
+		_backdrop.modulate = Color(1, 1, 1, 1)
+
+
+func _motion_value() -> float:
+	return _motion
