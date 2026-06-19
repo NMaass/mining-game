@@ -383,6 +383,8 @@ func _wire_ui() -> void:
 			_shop_modal.buy_upgrade_pressed.connect(_on_shop_buy_upgrade)
 		if not _shop_modal.closed.is_connected(_on_shop_closed):
 			_shop_modal.closed.connect(_on_shop_closed)
+	if _run_state != null and not _run_state.tray_emptied.is_connected(_on_tray_emptied):
+		_run_state.tray_emptied.connect(_on_tray_emptied, CONNECT_DEFERRED)
 	if _mine_select != null:
 		_mine_select.configure(
 			_tables,
@@ -767,6 +769,8 @@ func _start_dig() -> void:
 	if _hud != null:
 		_hud.set_end_dig_visible(false)
 	_refresh_after_state_change()
+	if _shop_modal != null and not _run_state.last_pack_result().is_empty():
+		_shop_modal.play_pack_reveal(RunState.STARTER_PACK_ID, _run_state.last_pack_result(), _motion_intensity())
 
 
 ## Called by BlockGrid when the relic cell breaks (AC-5.6.2). Marks the relic found,
@@ -882,10 +886,10 @@ func _update_preview() -> void:
 	# /data feel tunables onto the AimLine (it paints the dashes itself in _draw() — no shader/UV
 	# fragility; see reports/aim-line-method.md). The dash PERIOD is in along-line pixels, so it is
 	# stable as the arc's pixel length changes each frame.
-	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 2.5)
+	_preview_line.width = Registry.feel_f(_tables, "aim_line_width", 2.5) * 0.8
 	_preview_line.dash_px = Registry.feel_f(_tables, "aim_dash_px", 8.0)
 	_preview_line.gap_px = Registry.feel_f(_tables, "aim_gap_px", 7.0)
-	_preview_line.line_color = Color(1, 1, 0.6, 0.85)  # the old Gradient_aim head color
+	_preview_line.line_color = Color(0.95, 0.97, 1.0, 0.75)
 	_preview_line.alpha_mult = 1.0
 	_preview_line.set_points(path)
 	# Reticle: park it on the predicted first-bounce cell (the LAST preview point) while aiming,
@@ -941,6 +945,8 @@ var _aim_dash_t: float = 0.0
 ## aim with ←/→). Eased toward its target each frame by AimLine.ease_march_mult so the speed-up ramps
 ## in/out instead of snapping. Resets to 1.0 whenever the preview isn't shown.
 var _aim_march_mult: float = 1.0
+var _keyboard_aim_held_dir: int = 0
+var _keyboard_aim_hold_time: float = 0.0
 
 
 ## Per-frame cosmetic animation for the aim line + reticle. The MARCHING DASH now advances CONTINUOUSLY
@@ -1084,22 +1090,40 @@ func _keyboard_aim_dir() -> int:
 	return dir
 
 
-## Apply one frame of held-keyboard aim: nudge the AimController angle by the data-driven rate.
-## No-op while the tree is paused (a modal is open), the dig ended, a charge is in flight, or no key
-## is held. Uses the SAME AimController angle API the drag path mutates, so the preview + platform
-## look-ahead update through the existing angle_changed signal (one shared aim path, AC-5.3.1/5.3.7).
+## Apply one frame of held-keyboard aim: nudge the AimController angle by the data-driven ramp.
+## No-op while the tree is paused (a modal is open), the dig ended, or no key is held. A charge in
+## flight hides the preview but does not block changing the stored angle.
 func _apply_keyboard_aim(delta: float) -> void:
 	if _aim == null or _tree_paused():
+		_reset_keyboard_aim_ramp()
 		return
-	if _run_state == null or _run_state.dig_ended or _active_charge != null:
+	if _run_state == null or _run_state.dig_ended:
+		_reset_keyboard_aim_ramp()
 		return
 	var dir: int = _keyboard_aim_dir()
+	if dir != _keyboard_aim_held_dir:
+		_keyboard_aim_hold_time = 0.0
+		_keyboard_aim_held_dir = dir
 	if dir == 0:
+		_keyboard_aim_hold_time = 0.0
 		return
-	var rate: float = Registry.feel_f(_tables, "keyboard_aim_deg_per_sec", 90.0)
-	var next_angle: float = Aim.keyboard_angle_step(_aim.angle, dir, rate, delta)
+	_keyboard_aim_hold_time += maxf(delta, 0.0)
+	var next_angle: float = Aim.keyboard_angle_step_dest(
+		_aim.angle,
+		dir,
+		_keyboard_aim_hold_time,
+		delta,
+		Registry.keyboard_aim_start_deg_per_sec(_tables),
+		Registry.keyboard_aim_max_deg_per_sec(_tables),
+		Registry.keyboard_aim_accel_deg_per_sec2(_tables),
+	)
 	if next_angle != _aim.angle:
 		_aim.set_angle(next_angle)
+
+
+func _reset_keyboard_aim_ramp() -> void:
+	_keyboard_aim_held_dir = 0
+	_keyboard_aim_hold_time = 0.0
 
 
 # ── Thin instance-side reads feeding the pure guards (so the guards stay primitive + testable) ──
@@ -1356,6 +1380,21 @@ func _on_shop_closed() -> void:
 		Audio.play_music("music_mining")
 
 
+func _on_tray_emptied() -> void:
+	if _run_state == null or _run_state.dig_ended or _run_state.charges_remaining > 0:
+		return
+	if _economy.money <= 0:
+		_run_state.grant_basic_pack(5)
+		Audio.play_pack_open()
+		_refresh_after_state_change()
+		if _shop_modal != null:
+			_shop_modal.play_pack_reveal(RunState.BASIC_PACK_ID, _run_state.last_pack_result(), _motion_intensity())
+		return
+	if _shop_modal != null and not _shop_modal.visible:
+		Audio.play_music("music_shop")
+		_shop_modal.open(_motion_intensity())
+
+
 ## A per-dig MONEY upgrade (Shaft Engineering) was bought from the shop. Debit + record
 ## the level, apply it immediately (narrows the remaining descent), refresh the UI, and
 ## keep the modal open (so the player can buy more / see it flip to OWNED). Returns true on
@@ -1573,13 +1612,20 @@ func _check_descent() -> void:
 	# scan) WITHOUT an unbounded single scan — the loop terminates as soon as a solid row blocks.
 	var bottom: int = Registry.mine_bottom_row(_tables)
 	var window: int = _descent_scan_rows()
-	var row: int = support_row
-	while row < bottom:
-		var max_row: int = mini(bottom, row + window)
-		var hp_grid: Dictionary = _hp_grid_for_support_scan(row, max_row)
-		var next_row: int = PlatformLogic.next_support_row(hp_grid, row, _shaft_w, max_row, _shaft_left)
+	var max_row: int = mini(bottom, support_row + window)
+	var hp_grid: Dictionary = _hp_grid_for_support_scan(support_row, max_row)
+	var row: int = PlatformLogic.next_support_row(hp_grid, support_row, _shaft_w, max_row, _shaft_left)
+	while row > support_row and row < bottom:
+		var next_max_row: int = mini(bottom, row + window)
+		if next_max_row <= max_row:
+			break
+		for ry in range(max_row + 1, next_max_row + 1):
+			for x in range(_shaft_left, _shaft_left + _shaft_w):
+				hp_grid[Vector2i(x, ry)] = _grid.get_hp(x, ry)
+		max_row = next_max_row
+		var next_row: int = PlatformLogic.next_support_row(hp_grid, support_row, _shaft_w, max_row, _shaft_left)
 		if next_row <= row:
-			break  # a solid row blocks descent — stop (terminates the loop, bounded)
+			break
 		row = next_row
 	if row > support_row:
 		_platform.support_row = row

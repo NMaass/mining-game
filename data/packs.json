@@ -1,9 +1,24 @@
 {
+  "starter_pack": {
+    "display_name": "Starter Crate",
+    "price": 0,
+    "charge_count": 5,
+    "weights": {
+      "dynamite": 100
+    }
+  },
+  "basic_pack": {
+    "display_name": "Basic Crate",
+    "price": 0,
+    "charge_count": 5,
+    "weights": {
+      "free_charge": 100
+    }
+  },
   "basic": {
     "display_name": "Rusty Crate",
     "price": 50,
     "charge_count": 5,
-    "pity_every": 5,
     "weights": {
       "dynamite": 70,
       "charge_sticky": 25,
@@ -14,7 +29,6 @@
     "display_name": "Deep Pack",
     "price": 140,
     "charge_count": 6,
-    "pity_every": 4,
     "weights": {
       "dynamite": 40,
       "charge_sticky": 40,
@@ -25,7 +39,6 @@
     "display_name": "Heavy Crate",
     "price": 260,
     "charge_count": 4,
-    "pity_every": 3,
     "weights": {
       "cluster_bomb": 45,
       "drill_charge": 35,

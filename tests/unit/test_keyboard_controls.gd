@@ -91,23 +91,17 @@ func test_set_angle_updates_and_signals() -> void:
 	assert_float(ac.angle).is_equal_approx(0.5, 0.0001)
 	assert_int(seen.size()).is_equal(1)
 
-func test_set_angle_wraps_into_full_circle() -> void:
-	# AC-5.3.1 (v0.5 full 360°): set_angle WRAPS into (-PI, PI] (the same range the drag path yields)
-	# instead of clamping to a forward arc — so the keyboard / direct-set path can aim any direction
-	# (incl. upward) and a huge value never escapes the circle.
+func test_set_angle_clamps_to_useful_arc() -> void:
 	var ac: AimController = auto_free(AimController.new())
-	ac.set_angle(1000.0)
-	assert_bool(ac.angle > -PI - 0.0001 and ac.angle <= PI + 0.0001).is_true()
-	assert_float(ac.angle).is_equal_approx(Aim.wrap_angle(1000.0), 0.0001)
-	ac.set_angle(-1000.0)
-	assert_bool(ac.angle > -PI - 0.0001 and ac.angle <= PI + 0.0001).is_true()
-	assert_float(ac.angle).is_equal_approx(Aim.wrap_angle(-1000.0), 0.0001)
+	ac.set_angle(Aim.MAX_ANGLE + 0.5)
+	assert_float(ac.angle).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
+	ac.set_angle(Aim.MIN_ANGLE - 0.5)
+	assert_float(ac.angle).is_equal_approx(Aim.MIN_ANGLE, 0.0001)
 
-func test_set_angle_allows_upward_aim() -> void:
-	# v0.5: an upward angle (|a| > PI/2) is now reachable (was previously clamped out by the forward arc).
+func test_set_angle_blocks_straight_up() -> void:
 	var ac: AimController = auto_free(AimController.new())
 	ac.set_angle(PI)  # straight up
-	assert_float(absf(ac.angle)).is_equal_approx(PI, 0.0001)
+	assert_float(ac.angle).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
 
 func test_set_angle_ignored_when_disabled() -> void:
 	# AC-5.3.8 parity gate: while input is disabled (charge in flight / overlay open) the keyboard

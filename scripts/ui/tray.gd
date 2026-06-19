@@ -2,12 +2,11 @@ class_name TrayUi
 extends HBoxContainer
 ## 8-bit charge selector hotbar (AC-5.3.6, AC-5.8.1, AC-5.8.2, AC-5.10.2).
 ##
-## OWNED-ONLY roster: the controller pushes the owned tray slots verbatim ([free] + owned finite
-## charges, collapsed by id) and this view renders EXACTLY those — no locked/greyed placeholders for
-## un-owned explosives. The free charge is always the first slot (badge 1). Each slot carries a
-## NUMBER BADGE keycap (1..9) that maps 1:1 to the selection hotkey, so the index is stable + truthful.
-## Selection still emits the original `slot_selected(charge_id)` signal, keeping mine.gd's control
-## path unchanged.
+## OWNED-ONLY roster: the controller pushes the owned finite tray slots verbatim (collapsed by id)
+## and this view renders EXACTLY those — no locked/greyed placeholders for un-owned explosives.
+## Each slot carries a NUMBER BADGE keycap (1..9) that maps 1:1 to the selection hotkey, so the
+## index is stable + truthful. Selection still emits the original `slot_selected(charge_id)` signal,
+## keeping mine.gd's control path unchanged.
 
 signal slot_selected(charge_id: String)
 
@@ -42,8 +41,8 @@ func set_text_scale(scale: float) -> void:
 		_apply_text_scale_to_tree(_popover)
 
 ## Rebuild the hotbar from the controller's OWNED slot set (verbatim — no locked placeholders). Each
-## entry is {id, count}; the free charge (count -1 → ∞) is first by construction. Dedupes by id so a
-## malformed double-entry never spawns two slots. The slot at visible index i gets keycap (i+1).
+## entry is {id, count}. Dedupes by id so a malformed double-entry never spawns two slots. The slot
+## at visible index i gets keycap (i+1).
 func rebuild(slots: Array, selected_id: String) -> void:
 	_slot_ids.clear()
 	_slot_counts.clear()

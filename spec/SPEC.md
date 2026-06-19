@@ -256,9 +256,11 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   bottom + relic within it; v0.6 reverts to the infinite model.)
 
 ### 5.2 Destructible terrain (block HP + damage stages)
-- **AC-5.2.1** Each block SHALL have HP derived from its type's hardness via the data table, then
-  scaled by a **depth multiplier and a per-mine hardness multiplier** (both in `/data`), so deeper
-  and later mines are harder. The scaling SHALL be applied once at chunk init and stored per-cell.
+- **AC-5.2.1** Each block SHALL have HP equal to its type's base `max_hp` from the data table —
+  **NO depth multiplier, NO per-mine hardness multiplier** (v0.6.1: both removed per design decision).
+  Difficulty scaling comes from **depth bands placing harder block types** (higher base HP types like
+  hard_rock, obsidian) at greater depths, and later mines featuring harder block distributions in
+  their depth-band loot tables. The HP SHALL be applied once at chunk init and stored per-cell.
 - **AC-5.2.2** Per-cell HP and accumulated damage SHALL be stored in a parallel per-chunk array
   (`PackedInt32Array` indexed by local cell), NOT in the TileMap cell, with a lifecycle tied to
   chunk load/unload.
@@ -298,14 +300,16 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   SHALL remove one from the tray; the **free unlimited charge SHALL never be decremented**.
 - **REMOVED: AC-5.3.4** (predicted arc matches actual flight) — the preview is a pre-first-bounce hint
   only; post-bounce is intentionally unpredicted.
-- **REMOVED: AC-5.3.5** (empty-tray run-end) — the tray can never be empty (free unlimited charge);
-  there is no out-of-charges state.
+- **AC-5.3.5** WHEN the tray becomes empty, the system SHALL open the shop flow rather than ending
+  the dig; IF the player has no money and no charges, the system SHALL grant a free 5-pack of the
+  basic charge. The old "empty tray ends the run" and "free unlimited charge always in tray" models
+  are superseded.
 - **AC-5.3.6** WHEN a tray charge is tapped, the system SHALL select it as the active charge. The
   free unlimited charge SHALL be a permanent, always-selectable tray slot.
 - **AC-5.3.7** The aim and throw interactions SHALL behave identically for mouse and single-touch via
   a single shared code path.
-- **AC-5.3.8** The system SHALL NOT have any lose/fail state. A throw SHALL always be possible
-  (at minimum with the free charge).
+- **AC-5.3.8** The system SHALL NOT have any lose/fail state. The empty-tray shop flow and the
+  no-money free 5-pack of basic charges SHALL prevent soft-locks.
 - **AC-5.3.9** WHEN a charge is launched from the platform muzzle at the default straight-down angle
   in an otherwise open shaft, it SHALL descend into the mine unobstructed (v0.6: the platform is a
   VISUAL anchor, not a physics body — the charge passes through it via `collision_mask=1` (terrain-only),
@@ -320,12 +324,15 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 - **AC-5.4.2** Sticky charges SHALL freeze at first contact, then run their `detonation_mode`. A
   charge that comes to rest without ever impacting SHALL still resolve its `on_rest` mode (no
   soft-lock).
-- **AC-5.4.3** There SHALL be exactly one **free, unlimited** explosive — intentionally weak/
-  inefficient — always present in the tray. All other explosives are **finite** and **more efficient**
-  (better ore-per-throw / dig-per-throw), which is what money buys.
+- **AC-5.4.3** The basic weak/inefficient explosive SHALL be finite and available as a free 5-pack
+  only when the player has no money and no charges. Bought packs grant finite, more efficient
+  explosives (better ore-per-throw / dig-per-throw), which is what money buys. The old free
+  unlimited permanent tray slot is superseded.
 - **AC-5.4.4** A pack SHALL be a weighted table that yields a finite set of (efficient) charges, with
-  rare chances to roll a higher tier. Pity/bad-luck protection (guarantee a higher-tier roll within
-  `N` packs, `N` in `/data`) SHALL be implemented and tested, or the `pity` field SHALL be absent (no
+  rare chances to roll a higher tier. **No pity/bad-luck protection is implemented** (v0.6.1: removed
+  per design decision). The comeback mechanic is the free charge + dropping to an easier mine to
+  rebuild money — a player who cannot progress at the current depth returns to a shallower mine to
+  rebuild their economy. The `pity`/`pity_every` field SHALL be absent from `/data` (no
   declared-but-unimplemented fields).
 - **AC-5.4.5** WHEN a pack is opened, the system SHALL grant its rolled charges into the run tray.
   Pack rolls SHALL be driven by a single run-scoped seedable RNG (reproducible from the run/mine seed),
@@ -352,9 +359,11 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
   from editable data files validated by the `DataValidator` CI gate (ad-hoc GDScript rules + JSON
   schemas where present). "Schema-validated" here means the data gate enforces shape + cross-refs +
   ranges at build/test time; load-time validation is a ROADMAP hardening item, not a v0.6 shipping claim.
-- **AC-5.5.5** No `/data` configuration SHALL produce a stall: the free unlimited charge SHALL always
-  be able to break the floor beneath the platform (slowly), so progress is always possible without
-  spending. The data gate SHALL verify this property against each mine's floor-HP scaling.
+- **AC-5.5.5** No `/data` configuration SHALL produce a stall: the free charge SHALL always be able
+  to break the shallowest block type in any mine (slowly), so progress is always possible without
+  spending. The data gate SHALL verify this property — the free charge's blast intensity must exceed
+  the lowest base HP among block types placed in each mine's shallowest depth band. (v0.6.1: reworded
+  — "floor-HP scaling" removed since HP no longer scales with depth.)
 
 ### 5.6 Relics, prestige & power growth
 - **AC-5.6.1** Each mine SHALL contain a relic placed at generation time as a pure function of
@@ -534,17 +543,23 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 
 ## 8. Open decisions (still need answers)
 
-- Exact relic-set size, mine count, and relic distribution across the roster — **defer to step 5**,
-  back-solved from a chosen completion-time band.
-- The prestige **tree** shape/costs (power-growth nodes) beyond the minimal blast-intensity upgrade.
-- Mine-**access pricing** (money vs prestige vs both) and the per-mine **hardness-multiplier** curve.
+- ~~Exact relic-set size, mine count, and relic distribution across the roster~~ → **RESOLVED v0.6.1**:
+  8 mines (Surface, Coal, Copper, Quartz, Silver, Gold, Diamond, Abyss), 9 relics (1 per mine + Heart
+  of the Earth), relic at authored depth per mine.
+- The prestige **tree** shape/costs (power-growth nodes) — **24 nodes across 4 branches** (count
+  locked v0.6.1; node names/effects deferred to design pass).
+- Mine-**access pricing** (money vs prestige vs both) and the per-mine **hardness** curve (now: harder
+  block *types* at depth, not an HP multiplier — AC-5.2.1 amended).
 - The **efficiency model** for paid charges (how "efficiency" is expressed in data and felt in play —
   e.g. ore-per-throw, blast-per-cost, fewer throws to floor).
-- The content of the narrative reveal(s) and the authored **ending**.
-- The **non-color axis** of per-mine variety beyond recolor (alt base tiles vs parallax vs particle
-  ramps).
-- Onboarding/tutorial stance, app-lifecycle/title state, localization stance, analytics stance — see
-  `ROADMAP.md` §G4 (currently unspecced; decide before the relevant milestone).
+- The content of the narrative reveal(s) — **one line of lore per relic** (locked v0.6.1); the
+  authored **ending** — **content deferred to U22** (cinematic format locked).
+- ~~The **non-color axis** of per-mine variety~~ → **RESOLVED v0.6.1**: all three axes (alt base
+  tiles + parallax bgs + particle ramps).
+- ~~Onboarding/tutorial stance~~ → **RESOLVED v0.6.1**: one-time hint overlays, first dig only,
+  replayable from Settings. ~~Title state~~ → **RESOLVED v0.6.1**: logo + one-tap auto-continue.
+  Localization stance, analytics stance — see `ROADMAP.md` §G4 (currently unspecced; decide before
+  the relevant milestone).
 
 > **Resolved in v0.4** (were open in v0.3): physics module → **Rapier, non-deterministic**; noise →
 > **FastNoiseLite**; run model → **no-loss, relic-ends-dig, power-growth, finite soft cap**.
@@ -558,3 +573,22 @@ so traceability tooling doesn't silently lose them; new IDs continue the numberi
 > platform → **visual anchor, not a physics body** (charges pass through it; `collision_mask=1`
 > = terrain-only, not the v0.5-pinned `5`). The ACs below are amended to match. Per-mine
 > `width_cells`/`depth_cells` and a physical platform remain a ROADMAP option, not the shipping plan.
+>
+> **Resolved in v0.6.1** (2026-06-19 art-planning interview):
+> - **HP scaling removed** (AC-5.2.1 amended): no depth multiplier, no per-mine hardness multiplier.
+>   Difficulty comes from harder block *types* at depth (higher base HP), not a multiplier on the
+>   same types. Solvency gate (AC-5.5.5) reworded to match.
+> - **Pity removed** (AC-5.4.4 amended): no bad-luck protection. Comeback = free charge + drop to
+>   easier mine to rebuild economy.
+> - **Mine roster locked at 8** (real-world mining eras): Surface, Coal, Copper, Quartz, Silver,
+>   Gold, Diamond, Abyss (capstone). Width 128, infinite depth, relic at authored depth per mine.
+> - **Relic set locked at 9**: 1 per mine + 1 final (Heart of the Earth). One line of lore per relic.
+> - **Gacha roster locked at ~18 charges** across 5 rarities; **7 crates** (Rusty→Legendary Cache).
+> - **Per-mine variety**: all three axes (alt tile textures + parallax bgs + particle ramps).
+> - **Upgrade tree**: 24 nodes across 4 branches (design deferred, count locked).
+> - **Onboarding**: one-time hint overlays, first dig only (replayable from Settings).
+> - **Title screen**: logo + one-tap auto-continue.
+> - **Ending**: final-game cinematic only (content deferred to U22).
+> - **Art style**: Diggin cheerful/bright; 16px source / 32px render; no dithering; top-left light;
+>   1px outline on sprites/icons, 1px frame on tiles; textured parallax bgs; compact HUD.
+>   See `art/STYLE.md` for the full style contract.

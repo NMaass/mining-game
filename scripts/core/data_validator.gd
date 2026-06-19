@@ -1279,9 +1279,20 @@ static func _check_charge_motion_gate(explosives: Dictionary, balance: Dictionar
 static func _check_packs(packs: Dictionary, explosives: Dictionary, errors: Array) -> void:
 	if packs.is_empty():
 		errors.append("packs: registry is empty")
-	# v0.4: packs grant ONLY finite, efficient (paid) charges. The free unlimited
-	# charge is a flagged explosive (see _check_free_charge), not a price-0 pack —
-	# so the old "at least one free pack" rule is gone.
+	# v0.7: the basic charge ("free_charge") may appear in price-0 packs (starter_pack,
+	# basic_pack — the safety-net dig flow) but NOT in paid packs (price > 0), where it
+	# would devalue the efficiency model. The starter_pack and basic_pack are REQUIRED
+	# (the dig flow depends on them).
+	if not packs.has("starter_pack"):
+		errors.append("packs: missing required 'starter_pack' (the initial dig crate)")
+	if not packs.has("basic_pack"):
+		errors.append("packs: missing required 'basic_pack' (the no-money safety-net crate)")
+	var basic_charge_id: String = ""
+	for ex_id in explosives.keys():
+		var exv: Variant = explosives[ex_id]
+		if exv is Dictionary and (bool((exv as Dictionary).get("free", false)) or ex_id == "free_charge"):
+			basic_charge_id = ex_id
+			break
 	for id in packs.keys():
 		var p: Variant = packs[id]
 		if not (p is Dictionary):
@@ -1308,48 +1319,51 @@ static func _check_packs(packs: Dictionary, explosives: Dictionary, errors: Arra
 				errors.append("packs[%s]: references unknown explosive '%s'" % [id, ex_id])
 			elif int((explosives[ex_id] as Dictionary).get("tier", 1)) >= 2:
 				has_high_tier = true
-			# Packs grant paid charges only: the free charge must never be in a pack table.
-			elif bool((explosives[ex_id] as Dictionary).get("free", false)):
-				errors.append("packs[%s]: free charge '%s' must not appear in a pack table" % [id, ex_id])
+			# The basic charge may appear in price-0 packs (starter/basic) but not paid packs.
+			elif ex_id == basic_charge_id and int(p.get("price", 0)) > 0:
+				errors.append("packs[%s]: basic charge '%s' must not appear in a paid pack (price > 0)" % [id, ex_id])
 			if float(weights[ex_id]) <= 0.0:
 				errors.append("packs[%s]: weight for '%s' must be > 0" % [id, ex_id])
 		if int(p.get("pity_every", 0)) > 0 and not has_high_tier:
 			errors.append("packs[%s]: pity_every > 0 but no tier>=2 explosive is reachable to guarantee" % id)
 
-## v0.4: exactly one explosive is the flagged FREE unlimited charge, and it must be
-## able to break the shallowest floor beneath the platform — no /data config may
-## produce a stall (AC-5.4.3, AC-5.5.5, AC-5.4.6, AC-5.12.1).
+## v0.7: the basic charge ("free_charge") is the safety-net explosive granted as a
+## free 5-pack when the player is broke. It must be tier 1, the efficiency baseline
+## (all other explosives are more efficient), and able to break the worst-case floor
+## (no stall, AC-5.5.5/AC-5.4.6). The old "free: true unlimited" flag is no longer
+## required — the basic charge is finite, granted via packs.
 static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, curve: Variant, balance: Dictionary, errors: Array) -> void:
 	if explosives.is_empty():
 		return  # already reported by _check_explosives
-	var free_ids: Array = []
+	# Find the basic charge: prefer a `free: true` flag, else the "free_charge" id.
+	var basic_id: String = ""
 	for id in explosives.keys():
 		var ex: Variant = explosives[id]
 		if ex is Dictionary and bool(ex.get("free", false)):
-			free_ids.append(id)
-	if free_ids.is_empty():
-		errors.append("explosives: exactly one explosive must be flagged 'free: true' (the free unlimited charge); found none (SPEC AC-5.12.1)")
+			basic_id = id
+			break
+	if basic_id == "" and explosives.has("free_charge"):
+		basic_id = "free_charge"
+	if basic_id == "":
+		errors.append("explosives: missing the basic safety-net charge ('free_charge') — required for the no-money dig flow (AC-5.4.3)")
 		return
-	if free_ids.size() > 1:
-		errors.append("explosives: exactly one explosive may be flagged 'free: true'; found %d: %s" % [free_ids.size(), str(free_ids)])
-		return
-	var free: Dictionary = explosives[free_ids[0]]
-	# The free charge must not also be a paid pity guarantee — it should be tier 1.
+	var free: Dictionary = explosives[basic_id]
+	# The basic charge must be tier 1 (the inefficient baseline).
 	if int(free.get("tier", 1)) != 1:
-		errors.append("explosives[%s]: the free charge must be tier 1 (the inefficient baseline)" % free_ids[0])
+		errors.append("explosives[%s]: the basic charge must be tier 1 (the inefficient baseline)" % basic_id)
 
-	# AC-5.4.3: ALL other (paid) explosives SHALL be MORE efficient than the free charge —
+	# AC-5.4.3: ALL other (paid) explosives SHALL be MORE efficient than the basic charge —
 	# efficiency is the thing money buys. Enforce strict ordering so /data can't silently
-	# make the free charge as good as (or better than) a paid one.
+	# make the basic charge as good as (or better than) a paid one.
 	var free_eff: float = float(free.get("efficiency", 1.0))
 	for oid in explosives.keys():
-		if oid == free_ids[0]:
+		if oid == basic_id:
 			continue
 		var oex: Variant = explosives[oid]
 		if not (oex is Dictionary):
 			continue
 		if float((oex as Dictionary).get("efficiency", 0.0)) <= free_eff:
-			errors.append("explosives[%s]: paid charge efficiency %s must exceed the free charge's %s (AC-5.4.3: money buys efficiency)" % [oid, str((oex as Dictionary).get("efficiency", 0.0)), str(free_eff)])
+			errors.append("explosives[%s]: paid charge efficiency %s must exceed the basic charge's %s (AC-5.4.3: money buys efficiency)" % [oid, str((oex as Dictionary).get("efficiency", 0.0)), str(free_eff)])
 
 	# No-stall solvability (AC-5.5.5 / AC-5.4.6). The free charge need NOT one-hit
 	# the floor — AC-5.4.6 says it breaks it "eventually / slowly". The real stall
@@ -1374,7 +1388,7 @@ static func _check_free_charge(explosives: Dictionary, blocks: Dictionary, curve
 	var fuzz_pct: float = clampf(float(balance.get("blast_fuzz_pct", 0.0)), 0.0, 1.0)
 	var centre_damage: int = int(intensity * f0 * (1.0 - fuzz_pct))
 	if centre_damage <= 0:
-		errors.append("explosives[%s]: free charge worst-case damage is 0 (intensity %s x falloff[0] %s x (1-fuzz %s)) — a throw can deal 0 against the scaled floor (worst-case HP %d); would stall (SPEC AC-5.5.5 / AC-5.4.6)" % [free_ids[0], str(intensity), str(f0), str(fuzz_pct), floor_hp])
+		errors.append("explosives[%s]: basic charge worst-case damage is 0 (intensity %s x falloff[0] %s x (1-fuzz %s)) — a throw can deal 0 against the scaled floor (worst-case HP %d); would stall (SPEC AC-5.5.5 / AC-5.4.6)" % [basic_id, str(intensity), str(f0), str(fuzz_pct), floor_hp])
 
 ## Worst-case scaled floor HP in the infinite shaft, or -1 if no diggable floor exists.
 ## The hardest floor sits at/below the cap depth (where the rich cap_weights apply AND the

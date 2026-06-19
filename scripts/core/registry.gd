@@ -212,15 +212,18 @@ static func pack_ids(tables: Dictionary) -> Array:
 
 # ── Free unlimited charge (v0.4) ──────────────────────────────────────────────
 
-## Returns the id of the single flagged free unlimited charge, or "" if none.
-## v0.4: exactly one explosive is flagged `free: true` and occupies a permanent,
-## never-decremented tray slot (AC-5.4.3, AC-5.12.1).
+## Returns the id of the basic (safety-net) charge — the weakest explosive granted
+## as a free 5-pack when the player has no money and no charges (AC-5.4.3 v0.7).
+## Falls back to the "free_charge" id by name if no `free: true` flag exists (the
+## v0.7 model sets `free: false` — the basic charge is finite, not unlimited).
 static func free_charge_id(tables: Dictionary) -> String:
 	var explosives: Dictionary = tables.get("explosives", {})
 	for id in explosives.keys():
 		var ex: Variant = explosives[id]
 		if ex is Dictionary and bool(ex.get("free", false)):
 			return id
+	if explosives.has("free_charge"):
+		return "free_charge"
 	return ""
 
 # ── Balance lookup ──────────────────────────────────────────────────────────
@@ -594,6 +597,15 @@ static func feel_f(tables: Dictionary, key: String, default_value: float = 0.0) 
 ## A feel tunable as an int (e.g. muzzle-flash particle count).
 static func feel_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
 	return int(feel(tables).get(key, default_value))
+
+static func keyboard_aim_start_deg_per_sec(tables: Dictionary) -> float:
+	return feel_f(tables, "keyboard_aim_start_deg_per_sec", 35.0)
+
+static func keyboard_aim_accel_deg_per_sec2(tables: Dictionary) -> float:
+	return feel_f(tables, "keyboard_aim_accel_deg_per_sec2", 60.0)
+
+static func keyboard_aim_max_deg_per_sec(tables: Dictionary) -> float:
+	return feel_f(tables, "keyboard_aim_max_deg_per_sec", 140.0)
 
 # ── HP-scaling multipliers (AC-5.2.1) ─────────────────────────────────────────
 ## Per-cell depth multiplier coefficient: depth_mult = 1 + depth_cells * this.

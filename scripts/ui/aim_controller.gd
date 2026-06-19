@@ -85,11 +85,9 @@ func reset_angle() -> void:
 func set_angle(value: float) -> void:
 	if not _enabled:
 		return
-	# Full 360° aim (v0.5): wrap into (-PI, PI] instead of clamping to a forward arc, so the
-	# keyboard / direct-set paths can aim any direction (incl. upward), same as the drag path.
-	var wrapped: float = Aim.wrap_angle(value)
-	if wrapped != _angle:
-		_angle = wrapped
+	var clamped: float = Aim.clamp_angle(value)
+	if clamped != _angle:
+		_angle = clamped
 		angle_changed.emit(_angle)
 
 # ── Initial-arc preview (AC-5.3.1) ─────────────────────────────────────────

@@ -20,7 +20,7 @@ position = Vector2(0, -18)
 texture = ExtResource("2_player")
 
 [node name="Muzzle" type="Marker2D" parent="Body"]
-position = Vector2(0, 8)
+position = Vector2(0, -2)
 
 [node name="Camera" type="Camera2D" parent="."]
 position_smoothing_enabled = true

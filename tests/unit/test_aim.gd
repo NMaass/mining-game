@@ -50,45 +50,26 @@ func test_dead_zone_no_change() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(102, 103), current)
 	assert_float(angle).is_equal(current)
 
-func test_angle_in_full_circle_range() -> void:
-	# AC-5.3.1 (v0.5 full 360°): any drag yields an angle in atan2's (-PI, PI] range — the whole
-	# circle is reachable, there is no forward-arc clamp.
+func test_angle_in_useful_aim_range() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(500, 100))
 	assert_bool(angle <= Aim.MAX_ANGLE).is_true()
 	assert_bool(angle >= Aim.MIN_ANGLE).is_true()
 
-# ── Full 360° aim (v0.5): the player can aim ANY direction, including straight/shallow upward ──
-# Old behavior clamped to a forward arc (~±1.92 rad), blocking upward lobs. Those clamp tests are
-# replaced by these: an upward drag now produces an upward (|angle| > PI/2) launch angle.
-
-func test_drag_up_right_aims_upward() -> void:
-	# Dragging up-and-right (delta = +x, -y) aims into the upper-right hemisphere: angle > PI/2.
+func test_drag_up_right_clamps_to_lower_arc() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(150, 0))
-	# atan2(50, -100) ≈ 2.677 rad — past horizontal, pointing upward (NOT clamped to ~1.92).
-	assert_float(angle).is_equal_approx(atan2(50.0, -100.0), 0.001)
-	assert_bool(absf(angle) > PI / 2.0).is_true()  # genuinely upward, beyond the old clamp
+	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
 
-func test_drag_up_left_aims_upward() -> void:
-	# Dragging up-and-left aims into the upper-left hemisphere: angle < -PI/2.
+func test_drag_up_left_clamps_to_lower_arc() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(0, 0))
-	assert_float(angle).is_equal_approx(atan2(-100.0, -100.0), 0.001)  # ≈ -2.356 rad
-	assert_bool(angle < -PI / 2.0).is_true()
+	assert_float(angle).is_equal_approx(Aim.MIN_ANGLE, 0.001)
 
-func test_drag_straight_up_aims_up() -> void:
-	# Dragging straight up (delta = (0, -y)) aims straight up: |angle| == PI. atan2(0, -1) == PI.
+func test_drag_straight_up_clamps_to_edge() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(100, 0))
-	assert_float(absf(angle)).is_equal_approx(PI, 0.001)
+	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
 
-func test_drag_direction_is_honored_unclamped() -> void:
-	# AC-5.3.1: the launch direction matches the drag direction exactly (no clamp warps it). The
-	# direction vector built from the angle points the same way as the (down-y) drag delta.
-	var start := Vector2(100, 100)
-	var current := Vector2(40, 10)  # up-and-left
-	var angle: float = Aim.angle_from_drag(start, current)
-	var dir: Vector2 = Aim.angle_to_direction(angle)  # (sin a, cos a) — same x/y convention as drag
-	var drag := (current - start).normalized()
-	assert_float(dir.x).is_equal_approx(drag.x, 0.001)
-	assert_float(dir.y).is_equal_approx(drag.y, 0.001)
+func test_clamp_angle_keeps_forward_cone() -> void:
+	assert_float(Aim.clamp_angle(PI)).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
+	assert_float(Aim.clamp_angle(-PI)).is_equal_approx(Aim.MIN_ANGLE, 0.0001)
 
 func test_wrap_angle_normalizes_to_circle() -> void:
 	# AC-5.3.1 (v0.5): wrap_angle keeps the angle in (-PI, PI] so a continuous glide never runs away.
@@ -132,10 +113,10 @@ func test_launch_impulse_uses_data_sourced_base_impulse() -> void:
 	# separate player input. Prove the linkage end to end: two real explosives with DIFFERENT
 	# /data base_impulse yield launch impulses of those exact magnitudes through the shared
 	# ThrowParams→Aim path (was WEAK: the impulse tests used literal magnitudes, not real data).
-	var free_id: String = Registry.free_charge_id(_tables)
-	var data_free: float = float(Registry.explosive(_tables, free_id).get("base_impulse", -1.0))
+	var baseline_id := "dynamite"
+	var data_free: float = float(Registry.explosive(_tables, baseline_id).get("base_impulse", -1.0))
 	assert_float(data_free).is_greater(0.0)  # the data actually carries base_impulse
-	var p_free := ThrowParams.from_explosive(_tables, free_id)
+	var p_free := ThrowParams.from_explosive(_tables, baseline_id)
 	assert_float(p_free.base_impulse).is_equal(data_free)
 	# Straight-down launch: |impulse| == base_impulse (unit direction), so the magnitude is the
 	# data value, routed through ThrowParams.impulse_at_angle → Aim.launch_impulse.
@@ -422,6 +403,25 @@ func test_keyboard_aim_zero_rate_is_inert() -> void:
 func test_keyboard_aim_zero_delta_is_inert() -> void:
 	# A 0 delta (paused / first frame) makes no change.
 	assert_float(Aim.keyboard_angle_step(0.3, 1, 90.0, 0.0)).is_equal(0.3)
+
+func test_keyboard_dest_aim_starts_slow() -> void:
+	var a: float = Aim.keyboard_angle_step_dest(0.0, 1, 0.0, 1.0, 35.0, 140.0, 60.0)
+	assert_float(a).is_equal_approx(deg_to_rad(35.0), 0.0001)
+
+func test_keyboard_dest_aim_accelerates_with_hold_time() -> void:
+	var slow: float = Aim.keyboard_angle_step_dest(0.0, 1, 0.0, 1.0, 35.0, 140.0, 60.0)
+	var fast: float = Aim.keyboard_angle_step_dest(0.0, 1, 1.0, 1.0, 35.0, 140.0, 60.0)
+	assert_float(fast).is_greater(slow)
+	assert_float(fast).is_equal_approx(deg_to_rad(95.0), 0.0001)
+
+func test_keyboard_dest_aim_caps_rate() -> void:
+	var capped: float = Aim.keyboard_angle_step_dest(0.0, 1, 10.0, 1.0, 35.0, 140.0, 60.0)
+	assert_float(capped).is_equal_approx(deg_to_rad(140.0), 0.0001)
+
+func test_keyboard_dest_aim_wraps_internally() -> void:
+	var a: float = Aim.keyboard_angle_step_dest(PI - 0.05, 1, 0.0, 1.0, rad_to_deg(0.1), 140.0, 0.0)
+	assert_bool(a <= PI + 0.0001 and a > -PI - 0.0001).is_true()
+	assert_bool(a < 0.0).is_true()
 
 # ── AimLine dashed-arc walk: bounded, never hangs (regression) ─────────────────
 

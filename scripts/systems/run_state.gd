@@ -1,7 +1,6 @@
 class_name RunState
 extends RefCounted
-## Dig-loop state (v0.4): the tray always holds the free unlimited charge (never
-## decremented, never empty); paid packs grant finite efficient charges via a
+## Dig-loop state: digs start by opening a finite starter crate; packs grant charges via a
 ## reproducible run-scoped RNG; collecting the relic ENDS the dig, banks prestige,
 ## and resets per-dig state. No lose state. Stateful but no Node deps — headless.
 ##
@@ -17,18 +16,23 @@ extends RefCounted
 ## ACs: AC-5.3.3, AC-5.3.8, AC-5.4.3, AC-5.4.4, AC-5.4.5, AC-5.6.2, AC-5.6.3,
 ##      AC-5.6.4, AC-5.12.1, AC-5.12.2.
 
+signal tray_emptied
+
+const STARTER_PACK_ID := "starter_pack"
+const BASIC_PACK_ID := "basic_pack"
+const BASIC_CHARGE_ID := "free_charge"
+
 var _tables: Dictionary
 var _economy: Economy
 var _prestige: Prestige
 
-## The single flagged free unlimited charge id (permanent tray slot, AC-5.4.3/5.12.1).
+## The basic safety-net charge id. It is finite and granted in packs, not a permanent tray slot.
 var _free_charge_id: String = ""
 
 ## Finite (paid) charges granted into the tray this dig. Decremented on throw.
 var _finite_tray: Array = []
 
-## Currently selected charge id (the free charge or a finite charge). "" until set;
-## defaults to the free charge.
+## Currently selected charge id. "" when no charge is available.
 var _selected_id: String = ""
 
 ## Whether a charge is currently in flight.
@@ -63,11 +67,12 @@ func _init(tables: Dictionary, economy: Economy, prestige: Prestige = null) -> v
 	_economy = economy
 	_prestige = prestige if prestige != null else Prestige.new(tables)
 	_free_charge_id = Registry.free_charge_id(tables)
+	if _free_charge_id == "" and Registry.explosive(tables, BASIC_CHARGE_ID).size() > 0:
+		_free_charge_id = BASIC_CHARGE_ID
 
 # ── Dig lifecycle ─────────────────────────────────────────────────────────────
 
-## Start a new dig. The free charge is always present; per-dig state resets.
-## AC-5.12.1: the tray always contains the free unlimited charge — no purchase needed.
+## Start a new dig. Per-dig state resets, then the starter crate grants finite charges.
 func start_dig() -> void:
 	_finite_tray.clear()
 	_charge_in_flight = false
@@ -77,10 +82,12 @@ func start_dig() -> void:
 	_pity_counter.clear()
 	_upgrade_levels.clear()  # per-dig money upgrades reset with the dig (no persistence)
 	_last_pack_result.clear()
-	_selected_id = _free_charge_id
+	_selected_id = ""
 	_economy.reset_run()
 	# Reproducible pack rolls: seed the run-scoped RNG from the run seed (AC-5.4.5).
 	_pack_rng.seed = Registry.run_seed(_tables)
+	if not buy_pack(STARTER_PACK_ID):
+		grant_basic_pack(5)
 
 ## Backward-compat alias for the v0.3 controller (mine.gd, rebuilt in U10).
 func start_run() -> void:
@@ -94,97 +101,80 @@ var prestige: Prestige:
 # ── Tray & selection ──────────────────────────────────────────────────────────
 
 ## The current tray as a COPY (never the live backing array — AC: no leaky getter):
-## the free charge is always the first slot, followed by the finite charges.
+## finite charges only; the safety-net basic charge is included only when a pack grants it.
 var tray: Array:
 	get:
-		var out: Array = []
-		if _free_charge_id != "":
-			out.append(_free_charge_id)
-		out.append_array(_finite_tray)
-		return out
+		return _finite_tray.duplicate()
 
-## Count of FINITE charges remaining (the free charge is unlimited, not counted).
+## Count of finite charges remaining.
 func finite_count() -> int:
 	return _finite_tray.size()
 
-## Remaining count for a specific charge id: -1 (infinite) for the free charge,
-## else the number of that finite charge in the tray (AC-5.8.2: ∞ for free).
+## Remaining count for a specific charge id.
 func count_of(charge_id: String) -> int:
-	if charge_id == _free_charge_id:
-		return -1
 	return _finite_tray.count(charge_id)
 
-## Total selectable slots (free + finite). Always >= 1 (the free charge) — there is
-## never an empty tray (AC-5.3.8). Backward-compat name for the v0.3 controller;
-## because it is always >= 1, the old `charges_remaining <= 0` lock can never fire.
+## Total finite charges remaining. Backward-compat name for the v0.3 controller.
 var charges_remaining: int:
 	get:
-		return tray.size()
+		return _finite_tray.size()
 
-## The free unlimited charge id (permanent slot).
+## Permanent-free-slot compatibility property. Empty in the finite-pack model so legacy
+## tray renderers do not prepend an infinite slot.
 var free_charge_id: String:
 	get:
-		return _free_charge_id
+		return ""
 
-## The currently selected charge id (defaults to the free charge).
+## The currently selected charge id, or "" when the tray is empty.
 var selected_id: String:
 	get:
-		return _selected_id if _selected_id != "" else _free_charge_id
+		if _finite_tray.has(_selected_id):
+			return _selected_id
+		return _first_available_id()
 
-## Select a tray charge (AC-5.3.6). The free charge is always selectable; a finite
-## charge is selectable only while at least one remains. Returns true if selected.
+## Select a tray charge (AC-5.3.6). A charge is selectable only while at least one remains.
 func select(charge_id: String) -> bool:
-	if charge_id == _free_charge_id:
-		_selected_id = _free_charge_id
-		return true
 	if _finite_tray.has(charge_id):
 		_selected_id = charge_id
 		return true
 	return false
 
-## Cycle the selection to the NEXT distinct tray slot (free charge + one entry per finite type),
-## wrapping around. Drives the Tab key. Returns the newly-selected id. The free charge is always
-## the first slot; finite types follow in tray order (deduped). With only the free charge in the
-## tray this is a no-op that returns the free charge.
+## Cycle the selection to the NEXT distinct tray slot, wrapping around. Drives the Tab key.
 func select_next() -> String:
 	var slots: Array = _distinct_slots()
-	if slots.size() <= 1:
-		_selected_id = _free_charge_id
+	if slots.is_empty():
+		_selected_id = ""
+		return _selected_id
+	if slots.size() == 1:
+		_selected_id = str(slots[0])
 		return _selected_id
 	var cur: int = slots.find(selected_id)
 	var nxt: int = (cur + 1) % slots.size() if cur >= 0 else 0
 	_selected_id = str(slots[nxt])
 	return _selected_id
 
-## The distinct selectable slots in tray order: the free charge first, then each finite type once.
+## The distinct selectable slots in tray order, one entry per finite type.
 func _distinct_slots() -> Array:
 	var out: Array = []
-	if _free_charge_id != "":
-		out.append(_free_charge_id)
 	for id in _finite_tray:
 		if not out.has(id):
 			out.append(id)
 	return out
 
+func _first_available_id() -> String:
+	return str(_finite_tray[0]) if not _finite_tray.is_empty() else ""
+
 # ── Throw ─────────────────────────────────────────────────────────────────────
 
-## Throw the selected charge. Returns the explosive id thrown (always non-empty —
-## a throw is always possible, AC-5.3.8). The free charge is NEVER decremented
-## (AC-5.3.3/5.4.3); a finite charge removes one from the tray. If the selected
-## finite charge has run out, falls back to the free charge.
+## Throw the selected finite charge. Returns "" if the tray is empty.
 func throw() -> String:
 	var id: String = selected_id
-	if id != _free_charge_id:
-		var idx: int = _finite_tray.find(id)
-		if idx >= 0:
-			_finite_tray.remove_at(idx)
-			# If that was the last of this finite type, fall selection back to free.
-			if not _finite_tray.has(id):
-				_selected_id = _free_charge_id
-		else:
-			# Selected finite charge no longer available — use the free charge.
-			id = _free_charge_id
-			_selected_id = _free_charge_id
+	var idx: int = _finite_tray.find(id)
+	if idx < 0:
+		return ""
+	_finite_tray.remove_at(idx)
+	if not _finite_tray.has(id):
+		_selected_id = _first_available_id()
 	_charge_in_flight = true
 	return id
 
@@ -192,6 +182,9 @@ func throw() -> String:
 ## NOT end the dig (only the relic does). Kept for the controller's flow tracking.
 func resolve_charge() -> void:
 	_charge_in_flight = false
+	if not _dig_ended and _finite_tray.is_empty():
+		_selected_id = ""
+		tray_emptied.emit()
 
 ## Whether a charge is currently in flight.
 var charge_in_flight: bool:
@@ -220,6 +213,17 @@ func buy_pack(pack_id: String) -> bool:
 	# charge, not whatever was selected before). Ties resolve to the first granted in tray order.
 	_select_lowest_rarity_granted(before)
 	return true
+
+## Safety-net grant for the no-money/no-charge state. Grants finite basic charges, not an
+## unlimited permanent slot.
+func grant_basic_pack(count: int = 5) -> void:
+	_last_pack_result.clear()
+	var grant_count: int = maxi(0, count)
+	for i in range(grant_count):
+		_finite_tray.append(_free_charge_id)
+		_last_pack_result.append(_free_charge_id)
+	if _selected_id == "" and grant_count > 0:
+		_selected_id = _free_charge_id
 
 func last_pack_result() -> Array:
 	return _last_pack_result.duplicate()

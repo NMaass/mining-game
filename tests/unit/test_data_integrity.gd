@@ -105,58 +105,32 @@ func test_validator_rejects_non_rising_gem_probability() -> void:
 
 # ── Free unlimited charge (AC-5.4.3, AC-5.12.1) ─────────────────────────────
 
-func test_shipped_data_has_exactly_one_free_charge() -> void:
-	# AC-5.12.1: exactly one flagged free unlimited charge exists.
+func test_shipped_data_has_basic_charge() -> void:
+	# AC-5.4.3 (v0.7): the basic safety-net charge ('free_charge') exists in the explosives table.
 	var t := _load_real_tables()
-	var free_count := 0
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			free_count += 1
-	assert_int(free_count).is_equal(1)
+	assert_bool((t["explosives"] as Dictionary).has("free_charge")).is_true()
 
-func test_validator_requires_a_free_charge() -> void:
-	# AC-5.12.1: removing the free flag fails the gate (no free charge at all).
+func test_validator_requires_basic_charge() -> void:
+	# AC-5.4.3 (v0.7): removing the basic charge from explosives fails the gate.
 	var t := _load_real_tables()
-	for id in (t["explosives"] as Dictionary).keys():
-		(t["explosives"][id])["free"] = false
+	(t["explosives"] as Dictionary).erase("free_charge")
 	assert_array(Validator.validate(t)).is_not_empty()
 
-func test_validator_rejects_two_free_charges() -> void:
-	# AC-5.12.1: more than one free charge is ambiguous → fail.
+func test_validator_rejects_unsolvable_basic_charge() -> void:
+	# AC-5.5.5 / AC-5.4.6: the basic charge breaks the floor "eventually / slowly", so the
+	# no-stall condition is per-throw damage >= 1. Zero the centre falloff → stall.
 	var t := _load_real_tables()
-	for id in (t["explosives"] as Dictionary).keys():
-		(t["explosives"][id])["free"] = true
+	var f: Array = ((t["explosives"]["free_charge"] as Dictionary).get("blast_falloff") as Array).duplicate()
+	f[0] = 0.0
+	(t["explosives"]["free_charge"])["blast_falloff"] = f
 	assert_array(Validator.validate(t)).is_not_empty()
 
-func test_validator_rejects_unsolvable_free_charge() -> void:
-	# AC-5.5.5 / AC-5.4.6: the free charge breaks the floor "eventually / slowly", so the
-	# no-stall condition is per-throw damage >= 1 (surviving blocks retain damage,
-	# AC-5.2.7, no regen). The ONLY genuine stall is 0 integer damage per hit. Drive the
-	# centre damage to 0 via a zero centre-falloff and confirm the gate rejects it.
+func test_validator_accepts_slow_basic_charge_against_scaled_floor() -> void:
+	# AC-5.4.6: a basic charge that does NOT one-hit the deepest *scaled* floor (it is
+	# weak/slow) is still VALID — it breaks the floor eventually.
 	var t := _load_real_tables()
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			# intensity * falloff[0] floors to 0 -> never damages a cell -> stall forever.
-			var f: Array = ((t["explosives"][id] as Dictionary).get("blast_falloff") as Array).duplicate()
-			f[0] = 0.0
-			(t["explosives"][id])["blast_falloff"] = f
-	assert_array(Validator.validate(t)).is_not_empty()
-
-func test_validator_accepts_slow_free_charge_against_scaled_floor() -> void:
-	# AC-5.4.6: a free charge that does NOT one-hit the deepest *scaled* floor (it is
-	# weak/slow) is still VALID — it breaks the floor eventually. This guards against the
-	# old one-hit semantics regressing back: the shipped free charge is far weaker than
-	# the worst-case scaled floor HP, yet the gate must accept it.
-	var t := _load_real_tables()
-	var free_id := ""
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			free_id = id
-	assert_str(free_id).is_not_empty()
-	# Premise check: the free charge's centre damage is genuinely far below the worst-case
-	# scaled floor HP (so this test would FAIL under the old one-hit rule). UNIT MAPGEN: the
-	# worst-case floor sits at/below the cap depth where the HP multiplier hits its CEILING
-	# (max_depth_hp_mult), among the cheapest diggable block present in cap_weights.
+	var free_id := "free_charge"
+	assert_bool((t["explosives"] as Dictionary).has(free_id)).is_true()
 	var ex: Dictionary = t["explosives"][free_id]
 	var centre_damage: int = int(float(ex.get("blast_intensity", 0)) * float((ex.get("blast_falloff") as Array)[0]))
 	var b: Dictionary = t["balance"]
@@ -174,16 +148,17 @@ func test_validator_accepts_slow_free_charge_against_scaled_floor() -> void:
 	# The gate must still accept the shipped data: slow-but-solvable is valid.
 	assert_array(Validator.validate(t)).is_empty()
 
-func test_validator_rejects_free_charge_in_pack_table() -> void:
-	# Packs grant paid charges only; the free charge must never be poolable.
+func test_validator_rejects_basic_charge_in_paid_pack() -> void:
+	# v0.7: the basic charge may appear in price-0 packs (starter/basic) but NOT in paid packs.
 	var t := _load_real_tables()
-	var free_id := ""
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			free_id = id
-	var first_pack: String = (t["packs"] as Dictionary).keys()[0]
-	(t["packs"][first_pack]["weights"])[free_id] = 10
+	(t["packs"]["basic"]["weights"])["free_charge"] = 10  # 'basic' is a paid pack (price 50)
 	assert_array(Validator.validate(t)).is_not_empty()
+
+func test_validator_accepts_basic_charge_in_free_pack() -> void:
+	# v0.7: the basic charge in a price-0 pack (basic_pack) is valid (the safety net).
+	var t := _load_real_tables()
+	(t["packs"]["basic_pack"]["weights"])["free_charge"] = 100  # already there, but assert it passes
+	assert_array(Validator.validate(t)).is_empty()
 
 # ── Full explosive resource shape required (AC-5.4.1) ────────────────────────
 
@@ -210,27 +185,22 @@ func test_validator_requires_explosive_tier_and_efficiency() -> void:
 	assert_array(Validator.validate(t2)).is_not_empty()
 
 func test_validator_requires_paid_charges_more_efficient_than_free() -> void:
-	# AC-5.4.3: every paid charge SHALL be MORE efficient than the free charge (that is what
-	# money buys). Make the free charge the MOST efficient and the gate must reject it — the
-	# shipped ordering (free 1.0 < dynamite 2.0 < sticky 2.6 < heavy 3.4) is otherwise unpinned.
+	# AC-5.4.3: every paid charge SHALL be MORE efficient than the basic charge. Make the
+	# basic charge the MOST efficient and the gate must reject it.
 	var t := _load_real_tables()
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			(t["explosives"][id])["efficiency"] = 9.9  # free now beats every paid charge
+	(t["explosives"]["free_charge"])["efficiency"] = 9.9  # basic now beats every paid charge
 	assert_array(Validator.validate(t)).override_failure_message(
-		"validator must reject a free charge more efficient than the paid charges (AC-5.4.3)"
+		"validator must reject a basic charge more efficient than the paid charges (AC-5.4.3)"
 	).is_not_empty()
 
-func test_validator_rejects_free_charge_zero_worst_case_fuzz_damage() -> void:
+func test_validator_rejects_basic_charge_zero_worst_case_fuzz_damage() -> void:
 	# AC-5.5.5: the no-stall check folds WORST-CASE fuzz. A free charge whose UNFUZZED centre
 	# damage is >= 1 but whose worst fuzz roll floors to 0 would pass the old (unfuzzed) check
 	# yet can deal 0 on a bad roll. With intensity 1, falloff[0] 1.0, fuzz 0.25 →
 	# int(1*1*0.75)=0 → must be rejected now (was accepted before the fuzz fold).
 	var t := _load_real_tables()
-	for id in (t["explosives"] as Dictionary).keys():
-		if bool((t["explosives"][id] as Dictionary).get("free", false)):
-			(t["explosives"][id])["blast_intensity"] = 1
-			(t["explosives"][id])["blast_falloff"] = [1.0, 0.3]  # keep length == radius+1
+	(t["explosives"]["free_charge"])["blast_intensity"] = 1
+	(t["explosives"]["free_charge"])["blast_falloff"] = [1.0, 0.3]  # keep length == radius+1
 	# Sanity: unfuzzed centre damage int(1*1.0)=1 > 0, so ONLY the fuzz-fold catches this.
 	assert_array(Validator.validate(t)).override_failure_message(
 		"validator must reject a free charge whose worst-case fuzz damage is 0 (AC-5.5.5)"

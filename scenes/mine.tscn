@@ -401,7 +401,6 @@ theme_override_constants/separation = 8
 
 [node name="SelectorBar" type="PanelContainer" parent="Hud/Bottom"]
 custom_minimum_size = Vector2(0, 88)
-theme_override_styles/panel = SubResource("StyleBoxFlat_selectorbar")
 
 [node name="TrayScroll" type="ScrollContainer" parent="Hud/Bottom/SelectorBar"]
 custom_minimum_size = Vector2(0, 80)

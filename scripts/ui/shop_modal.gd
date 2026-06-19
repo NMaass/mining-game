@@ -74,6 +74,10 @@ func set_text_scale(scale: float) -> void:
 func open(motion: float = 1.0) -> void:
 	_motion = clampf(motion, 0.0, 1.0)
 	visible = true
+	if _panel != null:
+		_panel.visible = true
+	if _backdrop != null:
+		_backdrop.visible = true
 	var money: int = _current_money()
 	_refresh_affordability(money)
 	var tree := get_tree()
@@ -105,6 +109,13 @@ func close() -> void:
 func play_pack_reveal(pack_id: String, results: Array, motion: float = 1.0) -> void:
 	_ensure_reveal()
 	_motion = clampf(motion, 0.0, 1.0)
+	var reveal_only: bool = not visible
+	visible = true
+	if reveal_only:
+		if _panel != null:
+			_panel.visible = false
+		if _backdrop != null:
+			_backdrop.visible = false
 	_close_after_reveal = true
 	_reveal.show_pack(pack_id, results, motion)
 

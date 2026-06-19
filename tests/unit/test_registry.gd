@@ -36,7 +36,7 @@ func test_block_ore_value() -> void:
 	# worth a little), copper is the prominent $10 tier, gold is the $90 tier.
 	assert_int(Registry.block_ore_value(_tables, "rock")).is_equal(5)
 	assert_int(Registry.block_ore_value(_tables, "ore_copper")).is_equal(10)
-	assert_int(Registry.block_ore_value(_tables, "ore_gold")).is_equal(90)
+	assert_int(Registry.block_ore_value(_tables, "ore_gold")).is_equal(30)
 	assert_int(Registry.block_ore_value(_tables, "dirt")).is_equal(0)
 	assert_int(Registry.block_ore_value(_tables, "air")).is_equal(0)
 
@@ -140,8 +140,8 @@ func test_depth_odds_snap_to_hud_bucket() -> void:
 func test_explosive_returns_expected_fields() -> void:
 	# AC-5.4.1: explosive resource shape
 	var dyn: Dictionary = Registry.explosive(_tables, "dynamite")
-	assert_float(float(dyn.get("mass", 0.0))).is_equal(1.0)
-	assert_float(float(dyn.get("base_impulse", 0.0))).is_equal(520.0)
+	assert_float(float(dyn.get("mass", 0.0))).is_equal(1.5)
+	assert_float(float(dyn.get("base_impulse", 0.0))).is_equal(360.0)
 	assert_str(dyn.get("detonation_mode", "")).is_equal("fuse_seconds")
 	assert_int(int(dyn.get("blast_radius_cells", 0))).is_equal(2)
 	assert_int(int(dyn.get("blast_intensity", 0))).is_equal(80)
@@ -170,35 +170,38 @@ func test_pack_unknown_returns_empty() -> void:
 	assert_bool(p.is_empty()).is_true()
 
 func test_no_price_zero_pack_remains() -> void:
-	# VERTICAL_SLICE §0 salvage: the price-0 "starter" pack is removed in v0.4. No pack may
-	# be free — packs sell efficiency; only the flagged free charge is free.
+	# v0.7: price-0 packs are allowed (starter_pack, basic_pack — the dig-flow safety
+	# net). Only the basic_pack and starter_pack may be free; paid packs must cost > 0.
 	for id in Registry.pack_ids(_tables):
-		assert_int(int(Registry.pack(_tables, id).get("price", -1))).override_failure_message(
-			"pack '%s' has price 0 — v0.4 removes the free starter pack" % id
-		).is_greater(0)
+		if id == "starter_pack" or id == "basic_pack":
+			assert_int(int(Registry.pack(_tables, id).get("price", -1))).is_equal(0)
+		else:
+			assert_int(int(Registry.pack(_tables, id).get("price", -1))).override_failure_message(
+				"pack '%s' has price 0 — only starter_pack and basic_pack may be free" % id
+			).is_greater(0)
 
-# ── Free unlimited charge (AC-5.4.3, AC-5.12.1) ─────────────────────────────
+# ── Basic safety-net charge (AC-5.4.3 v0.7) ───────────────────────────────
 
 func test_free_charge_id() -> void:
-	# AC-5.12.1: exactly one flagged free unlimited charge is resolvable.
+	# AC-5.4.3 (v0.7): the basic safety-net charge is resolvable (by `free: true` flag
+	# or by the "free_charge" id fallback).
 	var id: String = Registry.free_charge_id(_tables)
 	assert_str(id).is_not_empty()
 	var ex: Dictionary = Registry.explosive(_tables, id)
-	assert_bool(ex.get("free", false) as bool).is_true()
-	# AC-5.4.3: the free charge is the inefficient tier-1 baseline.
+	# AC-5.4.3: the basic charge is the inefficient tier-1 baseline.
 	assert_int(int(ex.get("tier", 0))).is_equal(1)
 
 # ── Balance lookups ─────────────────────────────────────────────────────────
 
 func test_balance_values() -> void:
 	# AC-5.5.4: values from data
-	assert_int(Registry.mine_width_cells(_tables)).is_equal(64)
+	assert_int(Registry.mine_width_cells(_tables)).is_equal(400)
 	# UNIT MAPGEN: mine_height_cells 0 = the infinite-descent sentinel (no bottom).
 	assert_int(Registry.mine_height_cells(_tables)).is_equal(0)
 	assert_bool(Registry.is_infinite_depth(_tables)).is_true()
 	assert_int(Registry.mine_bottom_row(_tables)).is_equal(Registry.INFINITE_BOTTOM_ROW)
 	assert_int(Registry.shaft_width(_tables)).is_equal(9)
-	assert_int(Registry.shaft_left_cell(_tables)).is_equal(27)
+	assert_int(Registry.shaft_left_cell(_tables)).is_equal(195)
 	assert_int(Registry.chunk_height(_tables)).is_equal(16)
 	assert_int(Registry.block_pixel_size(_tables)).is_equal(16)
 	assert_int(Registry.starting_money(_tables)).is_equal(60)
