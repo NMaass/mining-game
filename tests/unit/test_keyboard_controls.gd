@@ -25,7 +25,8 @@ func test_may_not_fire_when_paused() -> void:
 	assert_bool(Mine.may_fire(false, false, true, true)).is_false()
 
 func test_may_not_fire_when_dig_ended() -> void:
-	# AC-5.3.3: no throw once the dig has ended (the relic/prestige boundary).
+	# AC-5.3.3: no throw once the dig has ended via the explicit leave path (UD2 — the relic no
+	# longer ends the dig; only the explicit return-to-surface does).
 	assert_bool(Mine.may_fire(true, false, true, false)).is_false()
 
 func test_may_not_fire_while_charge_in_flight() -> void:
@@ -91,17 +92,19 @@ func test_set_angle_updates_and_signals() -> void:
 	assert_float(ac.angle).is_equal_approx(0.5, 0.0001)
 	assert_int(seen.size()).is_equal(1)
 
-func test_set_angle_clamps_to_useful_arc() -> void:
+func test_set_angle_wraps_full_circle() -> void:
+	# AC-5.3.1 (full 360°): set_angle wraps into (-PI, PI] rather than clamping to a forward cone,
+	# so a value past straight-up rolls around the circle instead of saturating at an edge.
 	var ac: AimController = auto_free(AimController.new())
-	ac.set_angle(Aim.MAX_ANGLE + 0.5)
-	assert_float(ac.angle).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
-	ac.set_angle(Aim.MIN_ANGLE - 0.5)
-	assert_float(ac.angle).is_equal_approx(Aim.MIN_ANGLE, 0.0001)
+	ac.set_angle(PI + 0.5)
+	assert_float(ac.angle).is_equal_approx(Aim.wrap_angle(PI + 0.5), 0.0001)
+	assert_bool(ac.angle > -PI - 0.0001 and ac.angle <= PI + 0.0001).is_true()
 
-func test_set_angle_blocks_straight_up() -> void:
+func test_set_angle_allows_straight_up() -> void:
+	# Full 360°: straight-up (±PI) is a valid launch direction — no upward block.
 	var ac: AimController = auto_free(AimController.new())
 	ac.set_angle(PI)  # straight up
-	assert_float(ac.angle).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
+	assert_float(absf(ac.angle)).is_equal_approx(PI, 0.0001)
 
 func test_set_angle_ignored_when_disabled() -> void:
 	# AC-5.3.8 parity gate: while input is disabled (charge in flight / overlay open) the keyboard

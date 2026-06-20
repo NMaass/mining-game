@@ -50,26 +50,44 @@ func test_dead_zone_no_change() -> void:
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(102, 103), current)
 	assert_float(angle).is_equal(current)
 
-func test_angle_in_useful_aim_range() -> void:
+func test_angle_in_full_circle_range() -> void:
+	# AC-5.3.1 (full 360°): any drag yields an angle in atan2's (-PI, PI] range — the whole
+	# circle is reachable, there is no forward-arc clamp.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(500, 100))
 	assert_bool(angle <= Aim.MAX_ANGLE).is_true()
 	assert_bool(angle >= Aim.MIN_ANGLE).is_true()
 
-func test_drag_up_right_clamps_to_lower_arc() -> void:
+# ── Full 360° aim: the player can aim ANY direction, including straight/shallow upward ──
+# An upward drag now produces an upward (|angle| > PI/2) launch angle — no forward-arc clamp.
+
+func test_drag_up_right_aims_upward() -> void:
+	# Dragging up-and-right (delta = +x, -y) aims into the upper-right hemisphere: angle > PI/2.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(150, 0))
-	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
+	# atan2(50, -100) ≈ 2.677 rad — past horizontal, pointing upward (NOT clamped).
+	assert_float(angle).is_equal_approx(atan2(50.0, -100.0), 0.001)
+	assert_bool(absf(angle) > PI / 2.0).is_true()  # genuinely upward, beyond the old clamp
 
-func test_drag_up_left_clamps_to_lower_arc() -> void:
+func test_drag_up_left_aims_upward() -> void:
+	# Dragging up-and-left aims into the upper-left hemisphere: angle < -PI/2.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(0, 0))
-	assert_float(angle).is_equal_approx(Aim.MIN_ANGLE, 0.001)
+	assert_float(angle).is_equal_approx(atan2(-100.0, -100.0), 0.001)  # ≈ -2.356 rad
+	assert_bool(angle < -PI / 2.0).is_true()
 
-func test_drag_straight_up_clamps_to_edge() -> void:
+func test_drag_straight_up_aims_up() -> void:
+	# Dragging straight up (delta = (0, -y)) aims straight up: |angle| == PI. atan2(0, -1) == PI.
 	var angle: float = Aim.angle_from_drag(Vector2(100, 100), Vector2(100, 0))
-	assert_float(angle).is_equal_approx(Aim.MAX_ANGLE, 0.001)
+	assert_float(absf(angle)).is_equal_approx(PI, 0.001)
 
-func test_clamp_angle_keeps_forward_cone() -> void:
-	assert_float(Aim.clamp_angle(PI)).is_equal_approx(Aim.MAX_ANGLE, 0.0001)
-	assert_float(Aim.clamp_angle(-PI)).is_equal_approx(Aim.MIN_ANGLE, 0.0001)
+func test_drag_direction_is_honored_unclamped() -> void:
+	# AC-5.3.1: the launch direction matches the drag direction exactly (no clamp warps it). The
+	# direction vector built from the angle points the same way as the (down-y) drag delta.
+	var start := Vector2(100, 100)
+	var current := Vector2(40, 10)  # up-and-left
+	var angle: float = Aim.angle_from_drag(start, current)
+	var dir: Vector2 = Aim.angle_to_direction(angle)  # (sin a, cos a) — same x/y convention as drag
+	var drag := (current - start).normalized()
+	assert_float(dir.x).is_equal_approx(drag.x, 0.001)
+	assert_float(dir.y).is_equal_approx(drag.y, 0.001)
 
 func test_wrap_angle_normalizes_to_circle() -> void:
 	# AC-5.3.1 (v0.5): wrap_angle keeps the angle in (-PI, PI] so a continuous glide never runs away.

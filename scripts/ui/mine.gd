@@ -102,6 +102,9 @@ var _active_coins: int = 0
 ## BlockGrid's 4-cell footprint latch.
 var _relic_glow: Sprite2D = null
 var _relic_glow_time: float = 0.0
+## Base (resting) scale of the glow sprite, cached by _refresh_relic_glow so the pulse can breathe
+## ±6% around it without re-deriving the texture-fit each frame.
+var _relic_glow_base_scale: float = 0.0
 
 # ── Elevator hold-to-move ramp (continuous row-by-row glide while held) ────────
 ## Pure ramp integrators (one per direction) that turn held time into whole-row steps. Holding the
@@ -365,12 +368,9 @@ func _wire_ui() -> void:
 			_dig_end_panel.buy_upgrade_pressed.connect(_on_panel_buy_upgrade)
 		if not _dig_end_panel.next_dig_pressed.is_connected(_on_panel_next_dig):
 			_dig_end_panel.next_dig_pressed.connect(_on_panel_next_dig)
-	if _prestige_offer != null:
-		_prestige_offer.configure(_tables)  # data-driven pop-in duration
-		if not _prestige_offer.accepted.is_connected(_on_prestige_accepted):
-			_prestige_offer.accepted.connect(_on_prestige_accepted)
-		if not _prestige_offer.declined.is_connected(_on_prestige_declined):
-			_prestige_offer.declined.connect(_on_prestige_declined)
+	# UD2: the relic no longer pops a prestige offer (collecting it banks +1 prestige and the dig
+	# continues), so the PrestigeOffer overlay is no longer wired. The scene node is retained for
+	# save/scene compatibility but is never shown.
 	if _shop_modal != null:
 		_shop_modal.configure(
 			_tables,
@@ -465,22 +465,18 @@ func _on_nav_pressed() -> void:
 		_overlay.open()
 
 
-## Prominent "End Dig" / "Prestige" button pressed: show the prestige offer if the relic
-## has been found, otherwise end the dig without banking prestige.
+## Explicit "End Dig" (leave / return-to-surface) pressed — the ONLY way a dig ends (UD2). Prestige
+## was already banked the moment the relic was collected (collect_relic), so this NEVER banks again;
+## it just closes out the dig and shows the summary panel with the prestige banked this dig.
 func _on_end_dig_pressed() -> void:
-	if _run_state.relic_collected:
-		if _prestige_offer != null:
-			_prestige_offer.show_offer(_motion_intensity())
-	else:
-		# No relic yet: end the dig without prestige (soft abort).
-		_run_state.end_dig()
-		Audio.play_run_end_jingle()
-		Audio.play_music("music_menu")
-		if _dig_end_panel != null:
-			_dig_end_panel.show_dig_end(0, _run_state.total_prestige,
-				_run_state.prestige.blast_intensity_mult(), _motion_intensity())
-		if _aim != null:
-			_aim.set_enabled(false)
+	_run_state.end_dig()  # idempotent; does NOT bank prestige (already banked at relic time)
+	Audio.play_run_end_jingle()
+	Audio.play_music("music_menu")
+	if _dig_end_panel != null:
+		_dig_end_panel.show_dig_end(_last_banked, _run_state.total_prestige,
+			_run_state.prestige.blast_intensity_mult(), _motion_intensity())
+	if _aim != null:
+		_aim.set_enabled(false)
 	_refresh_all_ui()
 
 
@@ -767,75 +763,42 @@ func _start_dig() -> void:
 	if _dig_end_panel != null:
 		_dig_end_panel.hide_panel()
 	if _hud != null:
-		_hud.set_end_dig_visible(false)
+		# UD2: the dig ends only via the explicit leave button, so it is available from dig start
+		# (no longer gated on a relic find). The relic just banks prestige and the dig continues.
+		_hud.set_end_dig_visible(true, "END DIG")
 	_refresh_after_state_change()
 	if _shop_modal != null and not _run_state.last_pack_result().is_empty():
 		_shop_modal.play_pack_reveal(RunState.STARTER_PACK_ID, _run_state.last_pack_result(), _motion_intensity())
 
 
-## Called by BlockGrid when the relic cell breaks (AC-5.6.2). Marks the relic found,
-## plays the relic-found cue, and offers prestige: accept banks +1 point and ends the
-## dig; decline resumes play. The offer overlay pauses the tree.
+## Called by BlockGrid when the relic's 2×2 footprint is fully excavated (AC-5.6.2, UD2).
+## Banks +1 prestige IMMEDIATELY (exactly once, via RunState.relic_found → collect_relic) and the
+## dig CONTINUES — there is NO play-stopping end-dig offer. The player gets a non-blocking
+## "Relic collected! +1 prestige" confirmation (relic-chip pulse + warm-gold screen wash + FX) and
+## keeps digging. Autosaves at the prestige boundary (AC-5.11.4).
 func _on_relic_collected(cell: Vector2i) -> void:
-	_run_state.relic_found()
+	var before: int = _run_state.total_prestige
+	_run_state.relic_found()  # banks +1 prestige once; dig stays active
+	_last_banked = _run_state.total_prestige - before
 	Audio.play_relic_found()
-	Audio.play_music("music_relic", 0.12)
 	_hide_relic_glow()
 	_spawn_relic_pulse(cell)
-	# A longer hit-stop on the relic break — the dig's climax lands with a deeper freeze.
+	# A longer hit-stop on the relic break — the dig's beat lands with a deeper freeze.
 	# Fire-and-forget (self-restores time_scale); gated on motion + paused inside _hit_stop.
 	_hit_stop(Registry.vfx_f(_tables, "hitstop_relic_seconds", 0.16))
-	var motion: float = _motion_intensity()
-	if _hud != null:
-		# Relic-found beat (v0.5 arcade pass): pulse the relic chip + a warm-gold screen wash. Both
-		# motion-gated (the flash alpha is a11y-capped + scaled by motion → safe for AC-5.10.4).
-		_hud.set_relic_progress(true, motion)
-		_hud.flash(Color(1.0, 0.85, 0.4), Registry.ui_flash_alpha(_tables),
-			Registry.ui_flash_seconds(_tables), motion)
-		_hud.set_end_dig_visible(true, "PRESTIGE")
-	if _prestige_offer != null:
-		_prestige_offer.show_offer(motion)
-	else:
-		# Headless / no-UI fallback: auto-accept the prestige offer.
-		_accept_prestige()
-	_refresh_all_ui()
-
-
-## Player accepted the prestige offer: bank +1 point, end the dig, show the dig-end panel.
-func _on_prestige_accepted() -> void:
-	_accept_prestige()
-
-
-func _accept_prestige() -> void:
-	var before: int = _run_state.total_prestige
-	_run_state.end_dig()
-	_last_banked = _run_state.total_prestige - before
-	_save_progress()  # autosave at the dig/prestige boundary (AC-5.11.4)
 	var motion: float = _motion_intensity()
 	if _last_banked > 0:
 		Audio.play_prestige_banked()
 		Audio.play("prestige_bank")
-		# Prestige-banked beat (v0.5 arcade pass): a brighter wash than the relic-found one. Same
-		# a11y-capped + motion-gated flash. Only fires when a point was actually banked.
-		if _hud != null:
-			_hud.flash(Color(1.0, 0.95, 0.7), Registry.ui_flash_alpha(_tables),
-				Registry.ui_flash_seconds(_tables), motion)
-	if _aim != null:
-		_aim.set_enabled(false)
 	if _hud != null:
-		_hud.set_end_dig_visible(false)
-	if _dig_end_panel != null:
-		Audio.play_run_end_jingle()
-		Audio.play_music("music_menu")
-		_dig_end_panel.show_dig_end(
-			_last_banked, _run_state.total_prestige, _run_state.prestige.blast_intensity_mult(), motion
-		)
-	_refresh_all_ui()
-
-
-## Player declined the prestige offer: hide the offer and keep digging.
-func _on_prestige_declined() -> void:
-	_refresh_all_ui()
+		# Non-blocking "Relic collected! +1 prestige" confirmation: pulse the relic chip + a
+		# warm-gold screen wash (a11y-capped flash alpha, motion-gated → safe for AC-5.10.4). No
+		# modal, no end-dig button — the dig continues (UD2).
+		_hud.set_relic_progress(true, motion)
+		_hud.flash(Color(1.0, 0.92, 0.55), Registry.ui_flash_alpha(_tables),
+			Registry.ui_flash_seconds(_tables), motion)
+	_save_progress()  # autosave at the prestige boundary (AC-5.11.4)
+	_refresh_after_state_change()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AIM + PREVIEW
@@ -1048,6 +1011,14 @@ func _input(event: InputEvent) -> void:
 		# the key glides the platform continuously (ramping to a capped speed), exactly like holding
 		# the on-screen button — a single shared continuous path. We only consume the press edge here
 		# so it doesn't fall through to another action; the poll does the actual row stepping.
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("toggle_shop"):
+		# ` (tilde) opens the full-screen shop overlay — the same path as the on-screen SHOP button.
+		# No-op while a modal already pauses the tree or after the dig ended (mirrors the button rule).
+		# _input is suspended while the tree is paused, so this only fires from live play (open-only;
+		# the shop's own CLOSE button / tilde-when-unpaused handles dismissal).
+		if not _tree_paused() and not _run_state.dig_ended:
+			_on_buy_pack_button()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("cycle_charge"):
 		# Tab cycles the selected tray charge (free → each finite type → wrap). No-op while paused
@@ -2000,7 +1971,8 @@ func _refresh_relic_glow() -> void:
 	# Cover the 2x2 relic plus one block of falloff on every side.
 	var desired_px: float = float(_bps) * 4.0
 	var tex_size: Vector2 = _relic_glow.texture.get_size() if _relic_glow.texture != null else Vector2(128, 128)
-	_relic_glow.scale = Vector2.ONE * (desired_px / maxf(1.0, tex_size.x))
+	_relic_glow_base_scale = desired_px / maxf(1.0, tex_size.x)
+	_relic_glow.scale = Vector2.ONE * _relic_glow_base_scale
 	_relic_glow.visible = true
 
 
@@ -2043,6 +2015,10 @@ func _hide_relic_glow() -> void:
 		_relic_glow.visible = false
 
 
+## Pulse the relic glow: a sine over relic_glow_pulse_seconds drives BOTH the additive alpha (a
+## strong 0.30→0.95 swell so the purple beacon visibly breathes) AND a subtle ±6% scale breath, so
+## the glow genuinely pulses rather than sitting static. Web-safe: this only writes the Sprite2D's
+## modulate COLOR + scale on an additive CanvasItemMaterial (no GPUParticles, no fragment shader).
 func _update_relic_glow(delta: float) -> void:
 	if _relic_glow == null or not is_instance_valid(_relic_glow) or not _relic_glow.visible:
 		return
@@ -2050,8 +2026,11 @@ func _update_relic_glow(delta: float) -> void:
 	var pulse_seconds: float = maxf(0.1, Registry.relic_glow_pulse_seconds(_tables))
 	var wave: float = 0.5 + 0.5 * sin((TAU * _relic_glow_time) / pulse_seconds)
 	var color: Color = Registry.relic_glow_color(_tables)
-	color.a = lerpf(0.35, 0.72, wave)
+	color.a = lerpf(0.30, 0.95, wave)
 	_relic_glow.modulate = color
+	if _relic_glow_base_scale > 0.0:
+		var breath: float = _relic_glow_base_scale * lerpf(0.94, 1.06, wave)
+		_relic_glow.scale = Vector2.ONE * breath
 
 
 static func explosion_particle_count(base_amount: int, motion: float) -> int:

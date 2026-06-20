@@ -17,10 +17,11 @@ extends RefCounted
 ## Minimum drag distance (pixels) before angle changes. Below this → "no change".
 const DEAD_ZONE_PX := 10.0
 
-## Useful aim cone. 0 = straight down, negative = left, positive = right.
-## Keep the launch in a forward-ish cone so the initial arc stays low and readable.
-const MIN_ANGLE := -PI * 0.45
-const MAX_ANGLE := PI * 0.45
+## Full 360° aim. 0 = straight down, -PI/2 = left, +PI/2 = right, ±PI = straight up.
+## The player may aim ANY direction including upward (a forgiving lob) — there is no
+## directional clamp. The angle is kept normalized to (-PI, PI] (atan2's natural range).
+const MIN_ANGLE := -PI  # straight up (wraps to MAX_ANGLE)
+const MAX_ANGLE := PI    # straight up
 
 ## Default angle (straight down).
 const DEFAULT_ANGLE := 0.0

@@ -494,19 +494,21 @@ func _configure_body_geometry() -> void:
 			Vector2(-width_px * 0.5, -height_px + maxf(1.0, height_px * 0.25)),
 		])
 		edge.position = Vector2(0.0, 0.0)
+	# Default character anchor (used if the player sprite has no texture): just above the deck.
+	var character_y: float = -height_px - float(_cell_size) * 0.5
 	var player := get_node_or_null("Body/Player") as Sprite2D
 	if player != null and player.texture != null:
 		var tex_size: Vector2 = player.texture.get_size()
 		player.position = Vector2(0.0, -height_px - tex_size.y * 0.5)
+		character_y = player.position.y
 	var marker := get_node_or_null("Body/Muzzle") as Marker2D
 	if marker != null:
-		# Launch point is the CENTER of the block the character stands on — the platform
-		# target row is that cell's TOP edge, so +cell_size/2 puts the muzzle at the standing
-		# block's middle (the player's feet / deck level), NOT one cell below. The arc AND live
-		# charge both originate here. It is still strictly BELOW the platform TARGET line (by half
-		# a cell), so a default straight-down throw enters the cleared shaft (AC-5.3.9) and never
-		# rests on the launcher/platform line.
-		marker.position = Vector2(0.0, float(_cell_size) * 0.5)
+		# Launch point = the CHARACTER. The aim line AND the live charge both originate from the
+		# player sprite (the visible thrower) — not from under the deck. The muzzle sits ABOVE the
+		# platform target (negative local y); a thrown charge passes THROUGH the platform (a visual-
+		# only anchor, not a physics body) and falls into the cleared shaft, so a default straight-
+		# down throw still enters the mine and never rests on the platform line (AC-5.3.9 intent).
+		marker.position = Vector2(0.0, character_y)
 
 var shaft_left_cell: int:
 	get:

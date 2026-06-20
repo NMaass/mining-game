@@ -336,9 +336,11 @@ func test_muzzle_position_derives_from_authored_marker() -> void:
 	).is_not_null()
 	var expected: Vector2 = p.platform_target_position() + marker.position
 	assert_vector(p.muzzle_position()).is_equal(expected)
-	# AC-5.3.9: the muzzle sits BELOW the platform target (positive local y) so a default
-	# downward throw spawns under the platform body and enters the mine, never resting on it.
-	assert_float(p.muzzle_position().y).is_greater(p.platform_target_position().y)
+	# AC-5.3.9: the muzzle sits at the CHARACTER (above the platform target, negative local y) so
+	# the aim line + live charge originate from the visible thrower. A thrown charge passes THROUGH
+	# the visual-only platform into the cleared shaft, so it still enters the mine and never rests
+	# on the platform line.
+	assert_float(p.muzzle_position().y).is_less(p.platform_target_position().y)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MANUAL ELEVATOR MOVES (Wave 4: big blocky HUD arrows move the platform)
