@@ -328,7 +328,7 @@ static func _check_ui_transition(b: Dictionary, errors: Array) -> void:
 		["boot_reveal_seconds", true],
 		["boot_hold_seconds", false],
 		["toast_in_seconds", true],
-		["toast_hold_seconds", true],
+		["toast_hold_seconds", false],
 		["toast_out_seconds", true],
 	]
 	for rule in rules:

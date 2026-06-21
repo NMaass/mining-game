@@ -109,6 +109,13 @@ var _depth_bump_tween: Tween = null
 ## re-show never compounds alpha or strands the veil opaque / the banner on-screen).
 var _veil_tween: Tween = null
 var _toast_tween: Tween = null
+## The hold/out (veil) and in/hold/out (toast) durations the live tween is animating, captured so
+## the tween_method callbacks can evaluate the pure envelope without rebinding a lambda per call.
+var _veil_hold: float = 0.0
+var _veil_out: float = 0.0
+var _toast_in: float = 0.0
+var _toast_hold: float = 0.0
+var _toast_out: float = 0.0
 var _button_motion: float = 1.0
 
 
@@ -493,14 +500,15 @@ func flash(color: Color, peak_alpha: float, seconds: float, motion: float = 1.0)
 func reveal(hold_s: float, out_s: float, motion: float = 1.0) -> void:
 	if _veil == null:
 		return
+	# Capture the durations BEFORE any early return so a later _set_veil_alpha never reads stale values.
+	_veil_hold = hold_s
+	_veil_out = out_s
 	if _veil_tween != null and _veil_tween.is_valid():
 		_veil_tween.kill()
 	if clampf(motion, 0.0, 1.0) <= 0.01:
 		_veil.modulate = Color(1, 1, 1, 0)
 		return
 	_veil.modulate = Color(1, 1, 1, 1)
-	_veil_hold = hold_s
-	_veil_out = out_s
 	var total: float = _ScreenTransition.reveal_total_seconds(hold_s, out_s)
 	if total <= 0.0:
 		_veil.modulate = Color(1, 1, 1, 0)
@@ -514,12 +522,6 @@ func reveal(hold_s: float, out_s: float, motion: float = 1.0) -> void:
 func _set_veil_alpha(elapsed: float) -> void:
 	if _veil != null:
 		_veil.modulate.a = _ScreenTransition.reveal_alpha_at(elapsed, _veil_hold, _veil_out)
-
-
-# The hold/out durations the live veil tween is animating (captured so the tween_method callback can
-# evaluate the pure envelope without rebinding a lambda per call).
-var _veil_hold: float = 0.0
-var _veil_out: float = 0.0
 
 
 ## Show the non-blocking confirmation toast (e.g. "Relic recovered  +1 Prestige"). Fades IN over
@@ -560,11 +562,6 @@ func show_toast(text: String, in_s: float, hold_s: float, out_s: float, motion: 
 func _set_toast_alpha(elapsed: float) -> void:
 	if _toast != null:
 		_toast.modulate.a = _ScreenTransition.fade_alpha_at(elapsed, _toast_in, _toast_hold, _toast_out)
-
-
-var _toast_in: float = 0.0
-var _toast_hold: float = 0.0
-var _toast_out: float = 0.0
 
 
 ## A quick vertical squash on the depth chip when the platform drops (v0.5 arcade pass). Presentation

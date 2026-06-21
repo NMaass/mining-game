@@ -953,12 +953,14 @@ func test_validator_rejects_runaway_transition_duration() -> void:
 	).is_not_empty()
 
 func test_validator_allows_zero_hold_beat() -> void:
-	# The HOLD phases may be 0 (a beat-less fade is valid) — a 0 hold must NOT fail the gate.
-	var t := _load_real_tables()
-	(t["balance"]["ui_transition"])["dig_hold_seconds"] = 0.0
-	assert_array(_ui_transition_errors(t)).override_failure_message(
-		"validator must accept a 0 hold beat (beat-less fade is valid)"
-	).is_empty()
+	# The HOLD phases may be 0 (a beat-less fade is valid) — a 0 hold must NOT fail the gate. This
+	# covers ALL three holds (dig/boot/toast); toast_hold in particular is the instant-flash banner case.
+	for hold_key in ["dig_hold_seconds", "boot_hold_seconds", "toast_hold_seconds"]:
+		var t := _load_real_tables()
+		(t["balance"]["ui_transition"])[hold_key] = 0.0
+		assert_array(_ui_transition_errors(t)).override_failure_message(
+			"validator must accept a 0 '%s' beat (beat-less fade is valid)" % hold_key
+		).is_empty()
 
 # ── Launch & control-feel table (v0.5 arcade pass) ───────────────────────────
 # The throw-feel magnitudes (button squash/pop, animated aim line, platform recoil, muzzle flash)
