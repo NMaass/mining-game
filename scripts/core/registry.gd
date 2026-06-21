@@ -553,6 +553,16 @@ static func ui_crate_f(tables: Dictionary, key: String, default_value: float = 0
 static func ui_crate_i(tables: Dictionary, key: String, default_value: int = 0) -> int:
 	return int(ui_crate(tables).get(key, default_value))
 
+## Screen-transition timing tunables (dig/boot reveal-from-black + the relic toast banner).
+## Used by the Hud's reveal()/show_toast() only. Tunables are data, so these live in /data and
+## the data gate enforces presence + ranges (_check_ui_transition). Reads {} if absent (invalid).
+static func ui_transition(tables: Dictionary) -> Dictionary:
+	var x: Variant = tables.get("balance", {}).get("ui_transition", {})
+	return x if x is Dictionary else {}
+
+static func ui_transition_f(tables: Dictionary, key: String, default_value: float = 0.0) -> float:
+	return float(ui_transition(tables).get(key, default_value))
+
 # ── Settings defaults + ranges (AC-5.10.1) ────────────────────────────────────
 ## The `balance.settings` sub-table: the data-driven default values + ranges the
 ## Settings UI seeds from (SFX/Music volume, motion intensity, UI text scale). Empty

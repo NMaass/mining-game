@@ -46,6 +46,7 @@ const _STACK_GAP := 8.0
 ## (like _BAR_PAD), not game balance — the slot POSITIONS are what must stay fixed.
 const _ELEVATOR_SLOT_GAP := 12.0
 const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
+const _ScreenTransition := preload("res://scripts/core/screen_transition.gd")
 
 @onready var _top: Control = get_node_or_null("Top")
 @onready var _money_box: Control = get_node_or_null("Top/MoneyBox")
@@ -70,6 +71,14 @@ const PIXEL_UI_SCRIPT := preload("res://scripts/ui/pixel_ui.gd")
 ## screen wash. A legitimate full-screen flash ColorRect (like the light-mask ColorRect), distinct
 ## from the no-ColorRect-for-EXPLOSIONS rule. mouse_filter = IGNORE so it never eats input.
 @onready var _flash_rect: ColorRect = get_node_or_null("FlashRect")
+## Full-screen reveal veil (authored in mine.tscn, modulate.a = 0 at rest, near-black): fades a
+## fresh dig / app boot up FROM black so a state swap (terrain rebuild, panel dismiss) never
+## hard-cuts. mouse_filter = IGNORE so it never eats input. Distinct from the warm FlashRect wash.
+@onready var _veil: ColorRect = get_node_or_null("TransitionVeil")
+## Non-blocking confirmation banner (authored in mine.tscn, modulate.a = 0 at rest): the
+## "Relic recovered  +1 Prestige" toast fades in → holds → fades out. Informational, never modal.
+@onready var _toast: PanelContainer = get_node_or_null("Toast")
+@onready var _toast_label: Label = get_node_or_null("Toast/ToastLabel")
 
 ## Tables (for the data-driven touch-target + edge-margin values). Set via configure().
 var _tables: Dictionary = {}
@@ -96,6 +105,10 @@ var _money_pop_tween: Tween = null
 var _flash_tween: Tween = null
 var _relic_pulse_tween: Tween = null
 var _depth_bump_tween: Tween = null
+## Live tween handles for the reveal veil + the relic toast (killed before a re-trigger so a rapid
+## re-show never compounds alpha or strands the veil opaque / the banner on-screen).
+var _veil_tween: Tween = null
+var _toast_tween: Tween = null
 var _button_motion: float = 1.0
 
 
@@ -123,6 +136,9 @@ func _ready() -> void:
 		if button != null:
 			PIXEL_UI_SCRIPT.apply_button(button, "secondary", 20)
 			PIXEL_UI_SCRIPT.bind_button_feel(button, Callable(self, "_button_motion_value"))
+	# The relic toast reuses the shared pixel-panel bevel so the banner reads as part of the HUD.
+	if _toast != null:
+		PIXEL_UI_SCRIPT.apply_panel(_toast)
 	# Reflow when the window/viewport resizes (portrait aspect range — AC-5.8.6).
 	var vp := get_viewport()
 	if vp != null and not vp.size_changed.is_connected(apply_layout):
@@ -275,6 +291,19 @@ func apply_layout_with(window_px: Vector2i, safe_px: Rect2i, logical: Vector2i) 
 		if _bottom_bg != null:
 			_set_rect(_bottom_bg, 0.0, bottom_edge - bottom_h - _BAR_PAD,
 				float(logical.x), float(logical.y))
+
+
+	# Relic confirmation toast: a content-hugging banner centred horizontally in the safe area,
+	# in the upper third (clear of the top bar/odds strip above and gameplay below). Re-centred
+	# every layout pass so it tracks its own text width (show_toast re-runs the layout on a new
+	# message). Purely positional — visibility is driven by the toast's own modulate.a tween.
+	if _toast != null:
+		var t_min: Vector2 = _toast.get_combined_minimum_size()
+		var t_w: float = clampf(t_min.x, 140.0, float(logical.x) - insets["left"] - insets["right"])
+		var t_h: float = maxf(t_min.y, 44.0)
+		var t_x: float = (float(logical.x) - t_w) * 0.5
+		var t_y: float = insets["top"] + maxf(_min_touch(), 44.0) + _BAR_PAD * 2.0 + 56.0
+		_set_rect(_toast, t_x, t_y, t_x + t_w, t_y + t_h)
 
 
 ## Set a Control's rect via absolute offsets (anchors are pinned at top-left so offsets are
@@ -452,6 +481,90 @@ func flash(color: Color, peak_alpha: float, seconds: float, motion: float = 1.0)
 	_flash_tween = create_tween()
 	_flash_tween.tween_property(_flash_rect, "modulate", Color(1, 1, 1, 0.0), maxf(0.01, seconds)) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+## Reveal the screen FROM black: snap the veil opaque, hold for `hold_s`, then fade it out over
+## `out_s` (a "smooth transitions across screen states" beat — used at dig-start / app-boot so a
+## terrain rebuild + panel dismiss never hard-cuts). The alpha curve is the pure ScreenTransition
+## reveal envelope, driven by a single tween_method over elapsed time so the runtime matches the
+## unit-tested math exactly. Motion-gated: at motion ~0 there is NO veil (snaps clear instantly) so
+## reduced-motion players never get a flash of black. The veil ALWAYS lands at alpha 0 (a finish
+## callback guarantees it) so it can never strand the screen behind black. No-op headless if absent.
+func reveal(hold_s: float, out_s: float, motion: float = 1.0) -> void:
+	if _veil == null:
+		return
+	if _veil_tween != null and _veil_tween.is_valid():
+		_veil_tween.kill()
+	if clampf(motion, 0.0, 1.0) <= 0.01:
+		_veil.modulate = Color(1, 1, 1, 0)
+		return
+	_veil.modulate = Color(1, 1, 1, 1)
+	_veil_hold = hold_s
+	_veil_out = out_s
+	var total: float = _ScreenTransition.reveal_total_seconds(hold_s, out_s)
+	if total <= 0.0:
+		_veil.modulate = Color(1, 1, 1, 0)
+		return
+	_veil_tween = create_tween()
+	_veil_tween.tween_method(_set_veil_alpha, 0.0, total, total) \
+		.set_trans(Tween.TRANS_LINEAR)
+	_veil_tween.tween_callback(func() -> void: _veil.modulate = Color(1, 1, 1, 0))
+
+
+func _set_veil_alpha(elapsed: float) -> void:
+	if _veil != null:
+		_veil.modulate.a = _ScreenTransition.reveal_alpha_at(elapsed, _veil_hold, _veil_out)
+
+
+# The hold/out durations the live veil tween is animating (captured so the tween_method callback can
+# evaluate the pure envelope without rebinding a lambda per call).
+var _veil_hold: float = 0.0
+var _veil_out: float = 0.0
+
+
+## Show the non-blocking confirmation toast (e.g. "Relic recovered  +1 Prestige"). Fades IN over
+## `in_s`, HOLDS for `hold_s`, fades OUT over `out_s` via the pure ScreenTransition envelope. Never
+## modal, never eats input (mouse_filter IGNORE). Motion-gated: at motion ~0 the banner still shows
+## (it is INFORMATION, not just eye-candy) for the in+hold window, then clears — but with no fade
+## ramps. Always lands at alpha 0. No-op headless if the toast is absent.
+func show_toast(text: String, in_s: float, hold_s: float, out_s: float, motion: float = 1.0) -> void:
+	if _toast == null:
+		return
+	if _toast_label != null:
+		_toast_label.text = text
+	# Re-centre on the new text width (the banner hugs its content).
+	apply_layout()
+	if _toast_tween != null and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_toast_in = in_s
+	_toast_hold = hold_s
+	_toast_out = out_s
+	if clampf(motion, 0.0, 1.0) <= 0.01:
+		# Reduced motion: present the information without the fade ramps — snap visible, hold, clear.
+		_toast.modulate = Color(1, 1, 1, 1)
+		_toast_tween = create_tween()
+		_toast_tween.tween_interval(maxf(0.01, maxf(0.0, in_s) + maxf(0.0, hold_s)))
+		_toast_tween.tween_callback(func() -> void: _toast.modulate = Color(1, 1, 1, 0))
+		return
+	_toast.modulate = Color(1, 1, 1, 0)
+	var total: float = _ScreenTransition.fade_total_seconds(in_s, hold_s, out_s)
+	if total <= 0.0:
+		_toast.modulate = Color(1, 1, 1, 0)
+		return
+	_toast_tween = create_tween()
+	_toast_tween.tween_method(_set_toast_alpha, 0.0, total, total) \
+		.set_trans(Tween.TRANS_LINEAR)
+	_toast_tween.tween_callback(func() -> void: _toast.modulate = Color(1, 1, 1, 0))
+
+
+func _set_toast_alpha(elapsed: float) -> void:
+	if _toast != null:
+		_toast.modulate.a = _ScreenTransition.fade_alpha_at(elapsed, _toast_in, _toast_hold, _toast_out)
+
+
+var _toast_in: float = 0.0
+var _toast_hold: float = 0.0
+var _toast_out: float = 0.0
 
 
 ## A quick vertical squash on the depth chip when the platform drops (v0.5 arcade pass). Presentation

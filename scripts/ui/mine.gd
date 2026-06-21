@@ -251,7 +251,7 @@ func boot() -> void:
 	if _platform != null:
 		_platform.configure(_tables, 0)
 
-	_start_dig()
+	_start_dig(true)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WIRING (the authored nodes → the systems)
@@ -722,7 +722,7 @@ func _build_grid_for(mine_id: String) -> void:
 	_refresh_relic_glow()
 
 
-func _start_dig() -> void:
+func _start_dig(is_boot: bool = false) -> void:
 	_run_state.start_dig()
 	# Enter the selected mine (rebuild the grid only when it differs from the active one). The
 	# ore multiplier is re-applied here because start_dig → reset_run resets money; the mult and
@@ -769,6 +769,14 @@ func _start_dig() -> void:
 	_refresh_after_state_change()
 	if _shop_modal != null and not _run_state.last_pack_result().is_empty():
 		_shop_modal.play_pack_reveal(RunState.STARTER_PACK_ID, _run_state.last_pack_result(), _motion_intensity())
+	# Fade the fresh dig up FROM black so the terrain rebuild + any dismissed dig-end panel never
+	# hard-cut (smooth transitions across start → dig → next-dig). The world state above is already
+	# committed; the veil is a purely cosmetic wash that self-clears. Boot gets a longer fade-in.
+	if _hud != null:
+		var hold_key: String = "boot_hold_seconds" if is_boot else "dig_hold_seconds"
+		var reveal_key: String = "boot_reveal_seconds" if is_boot else "dig_reveal_seconds"
+		_hud.reveal(Registry.ui_transition_f(_tables, hold_key, 0.1),
+			Registry.ui_transition_f(_tables, reveal_key, 0.5), _motion_intensity())
 
 
 ## Called by BlockGrid when the relic's 2×2 footprint is fully excavated (AC-5.6.2, UD2).
@@ -797,6 +805,13 @@ func _on_relic_collected(cell: Vector2i) -> void:
 		_hud.set_relic_progress(true, motion)
 		_hud.flash(Color(1.0, 0.92, 0.55), Registry.ui_flash_alpha(_tables),
 			Registry.ui_flash_seconds(_tables), motion)
+		# A non-blocking confirmation BANNER spells out what just happened — the chip pulse + wash are
+		# ambient, but the toast states the reward in words ("+N Prestige") so the beat reads even at a
+		# glance / on reduced motion. The slice banks exactly 1 prestige per relic.
+		_hud.show_toast("Relic recovered   +%d Prestige" % _last_banked,
+			Registry.ui_transition_f(_tables, "toast_in_seconds", 0.22),
+			Registry.ui_transition_f(_tables, "toast_hold_seconds", 1.1),
+			Registry.ui_transition_f(_tables, "toast_out_seconds", 0.45), motion)
 	_save_progress()  # autosave at the prestige boundary (AC-5.11.4)
 	_refresh_after_state_change()
 

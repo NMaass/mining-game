@@ -49,6 +49,15 @@
   "ui_flash_alpha": 0.45,
   "ui_flash_seconds": 0.3,
   "ui_tray_pop_seconds": 0.14,
+  "ui_transition": {
+    "dig_reveal_seconds": 0.5,
+    "dig_hold_seconds": 0.05,
+    "boot_reveal_seconds": 0.8,
+    "boot_hold_seconds": 0.15,
+    "toast_in_seconds": 0.22,
+    "toast_hold_seconds": 1.1,
+    "toast_out_seconds": 0.45
+  },
   "ui_selector": {
     "slot_width_px": 88,
     "slot_height_px": 78,

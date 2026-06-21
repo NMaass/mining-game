@@ -547,6 +547,34 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(1, 0.85, 0.4, 1)
 
+[node name="Toast" type="PanelContainer" parent="Hud"]
+modulate = Color(1, 1, 1, 0)
+offset_left = 180.0
+offset_top = 320.0
+offset_right = 540.0
+offset_bottom = 372.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="ToastLabel" type="Label" parent="Hud/Toast"]
+layout_mode = 2
+mouse_filter = 2
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
+theme_override_fonts/font = ExtResource("11_pixelfont")
+theme_override_font_sizes/font_size = 26
+
+[node name="TransitionVeil" type="ColorRect" parent="Hud"]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.03, 0.04, 0.06, 1)
+
 [node name="Overlay" parent="." instance=ExtResource("7_overlay")]
 
 [node name="PrestigeOffer" type="CanvasLayer" parent="."]
