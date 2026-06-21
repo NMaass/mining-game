@@ -36,6 +36,7 @@ static func validate(tables: Dictionary) -> Array:
 	_check_balance(balance, errors)
 	_check_ui(balance, errors)
 	_check_ui_overhaul(balance, errors)
+	_check_ui_transition(balance, errors)
 	_check_settings(balance, errors)
 	_check_vfx(balance, errors)
 	_check_feel(balance, errors)
@@ -304,6 +305,45 @@ static func _check_ui_overhaul(b: Dictionary, errors: Array) -> void:
 				errors.append("balance.ui_crate: missing 'particle_count_rare'")
 			elif int(cd.get("particle_count_rare", 0)) < 0:
 				errors.append("balance.ui_crate: 'particle_count_rare' must be >= 0")
+
+## Screen-transition timing (dig/boot reveal-from-black + the relic toast banner). Every duration
+## is a /data tunable, not a code literal (mirrors the _check_vfx / _check_ui_overhaul rules). All
+## keys are REQUIRED + range-checked: durations are strictly > 0 (a 0 would disable the effect or
+## divide-by-zero the envelope) and capped small (<= 4s) so a typo can't strand the screen behind an
+## opaque veil or pin a banner on-screen forever. The HOLD phases may be 0 (a beat-less fade is
+## valid) so they are >= 0.
+static func _check_ui_transition(b: Dictionary, errors: Array) -> void:
+	if not b.has("ui_transition"):
+		errors.append("balance: missing 'ui_transition' block (screen reveal + relic toast timing)")
+		return
+	var v: Variant = b.get("ui_transition")
+	if not (v is Dictionary):
+		errors.append("balance.ui_transition: must be a JSON object")
+		return
+	var td: Dictionary = v
+	# (key, strict_min) — reveal/fade DURATIONS must be > 0; HOLD beats may be 0. All capped <= 4s.
+	var rules: Array = [
+		["dig_reveal_seconds", true],
+		["dig_hold_seconds", false],
+		["boot_reveal_seconds", true],
+		["boot_hold_seconds", false],
+		["toast_in_seconds", true],
+		["toast_hold_seconds", false],
+		["toast_out_seconds", true],
+	]
+	for rule in rules:
+		var k: String = rule[0]
+		var strict: bool = rule[1]
+		if not td.has(k):
+			errors.append("balance.ui_transition: missing '%s'" % k)
+			continue
+		var val: float = float(td.get(k, 0.0))
+		if strict and val <= 0.0:
+			errors.append("balance.ui_transition: '%s' %s must be > 0" % [k, str(val)])
+		elif not strict and val < 0.0:
+			errors.append("balance.ui_transition: '%s' %s must be >= 0" % [k, str(val)])
+		if val > 4.0:
+			errors.append("balance.ui_transition: '%s' %s must be <= 4 (a runaway veil/banner would strand the screen)" % [k, str(val)])
 
 ## AC-5.10.1 (accessibility settings). The Settings UI seeds from data-driven defaults +
 ## ranges — volumes/motion are normalized [0,1] sliders; the UI text scale carries an

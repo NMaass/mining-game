@@ -905,6 +905,63 @@ func test_validator_rejects_zero_debris_cap() -> void:
 	(t["balance"]["vfx"])["max_debris_emitters"] = 0
 	assert_array(_vfx_errors(t)).is_not_empty()
 
+# ── Screen-transition table (reveal veil + relic toast timing) ───────────────
+# Every transition duration is a /data tunable; the gate enforces presence + bounds so a
+# typo can't strand the screen behind an opaque veil or pin the banner on-screen forever.
+
+func _ui_transition_errors(t: Dictionary) -> Array:
+	var out: Array = []
+	for e in Validator.validate(t):
+		if str(e).contains("ui_transition"):
+			out.append(e)
+	return out
+
+func test_shipped_data_passes_ui_transition_rules() -> void:
+	# Positive: the shipped ui_transition block satisfies the gate.
+	assert_array(_ui_transition_errors(_load_real_tables())).override_failure_message(
+		"shipped balance.ui_transition must satisfy _check_ui_transition"
+	).is_empty()
+
+func test_validator_requires_ui_transition_block() -> void:
+	# The transition timing is /data — a missing block fails the gate (no code-side defaults).
+	var t := _load_real_tables()
+	(t["balance"] as Dictionary).erase("ui_transition")
+	assert_array(_ui_transition_errors(t)).is_not_empty()
+
+func test_validator_requires_each_ui_transition_key() -> void:
+	# Mutation-verified: a MISSING required key fails the gate (catches a typo'd rename).
+	var t := _load_real_tables()
+	(t["balance"]["ui_transition"] as Dictionary).erase("toast_hold_seconds")
+	assert_array(_ui_transition_errors(t)).override_failure_message(
+		"validator must reject a ui_transition table missing 'toast_hold_seconds'"
+	).is_not_empty()
+
+func test_validator_rejects_zero_reveal_duration() -> void:
+	# A 0-second reveal is a strict-min duration (it would disable the fade / divide-by-zero). Reject.
+	var t := _load_real_tables()
+	(t["balance"]["ui_transition"])["dig_reveal_seconds"] = 0.0
+	assert_array(_ui_transition_errors(t)).override_failure_message(
+		"validator must reject ui_transition.dig_reveal_seconds == 0"
+	).is_not_empty()
+
+func test_validator_rejects_runaway_transition_duration() -> void:
+	# Durations are capped (<= 4s) so a typo can't strand the screen behind black / a stuck banner.
+	var t := _load_real_tables()
+	(t["balance"]["ui_transition"])["boot_reveal_seconds"] = 99.0
+	assert_array(_ui_transition_errors(t)).override_failure_message(
+		"validator must reject an absurdly long ui_transition duration"
+	).is_not_empty()
+
+func test_validator_allows_zero_hold_beat() -> void:
+	# The HOLD phases may be 0 (a beat-less fade is valid) — a 0 hold must NOT fail the gate. This
+	# covers ALL three holds (dig/boot/toast); toast_hold in particular is the instant-flash banner case.
+	for hold_key in ["dig_hold_seconds", "boot_hold_seconds", "toast_hold_seconds"]:
+		var t := _load_real_tables()
+		(t["balance"]["ui_transition"])[hold_key] = 0.0
+		assert_array(_ui_transition_errors(t)).override_failure_message(
+			"validator must accept a 0 '%s' beat (beat-less fade is valid)" % hold_key
+		).is_empty()
+
 # ── Launch & control-feel table (v0.5 arcade pass) ───────────────────────────
 # The throw-feel magnitudes (button squash/pop, animated aim line, platform recoil, muzzle flash)
 # are /data tunables; _check_feel enumerates + range-checks every key so a typo'd key can't silently
