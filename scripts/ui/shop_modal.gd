@@ -174,6 +174,17 @@ func _build_entries() -> void:
 		price_label.add_theme_font_size_override("font_size", 22)
 		entry.add_child(price_label)
 
+		var value_label := Label.new()
+		value_label.name = "ValueSummary"
+		value_label.text = _pack_value_summary(pack_data)
+		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		value_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		value_label.custom_minimum_size = Vector2(160, 0)
+		value_label.add_theme_font_override("font", PIXEL_FONT)
+		value_label.add_theme_font_size_override("font_size", 16)
+		value_label.modulate = Color(0.95, 0.88, 0.62, 1.0)
+		entry.add_child(value_label)
+
 		var odds_box := VBoxContainer.new()
 		odds_box.name = "Odds"
 		odds_box.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -248,6 +259,17 @@ func _build_upgrade_entry(up_id: String, up: Dictionary) -> VBoxContainer:
 	price_label.add_theme_font_size_override("font_size", 22)
 	entry.add_child(price_label)
 
+	var effect_label := Label.new()
+	effect_label.name = "EffectSummary"
+	effect_label.text = _upgrade_effect_summary(up)
+	effect_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	effect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	effect_label.custom_minimum_size = Vector2(150, 0)
+	effect_label.add_theme_font_override("font", PIXEL_FONT)
+	effect_label.add_theme_font_size_override("font_size", 16)
+	effect_label.modulate = Color(0.95, 0.88, 0.62, 1.0)
+	entry.add_child(effect_label)
+
 	var desc_label := Label.new()
 	desc_label.name = "Desc"
 	desc_label.text = str(up.get("description", ""))
@@ -268,6 +290,39 @@ func _build_upgrade_entry(up_id: String, up: Dictionary) -> VBoxContainer:
 	entry.add_child(buy_btn)
 	_upgrade_buttons[up_id] = buy_btn
 	return entry
+
+
+## Compact card-level value readout for reward-progression clarity. Pack odds already show
+## what can drop; this summarizes why the purchase is economically attractive: how many
+## throws it adds, the expected efficiency multiplier versus the basic charge, and the
+## expected center blast power. Values are derived entirely from /data weights + explosive
+## stats so tuning remains data-driven.
+func _pack_value_summary(pack_data: Dictionary) -> String:
+	var count: int = int(pack_data.get("charge_count", 0))
+	var weights: Dictionary = pack_data.get("weights", {})
+	var total_weight: float = _total_weight(weights)
+	if count <= 0 or total_weight <= 0.0:
+		return "%d throws" % count
+	var avg_eff: float = 0.0
+	var avg_power: float = 0.0
+	for ex_id: String in weights.keys():
+		var ex: Dictionary = Registry.explosive(_tables, ex_id)
+		var share: float = float(weights[ex_id]) / total_weight
+		avg_eff += share * float(ex.get("efficiency", 0.0))
+		avg_power += share * float(ex.get("blast_intensity", 0.0))
+	return "%d throws • avg x%.1f efficiency • %.0f power" % [count, avg_eff, avg_power]
+
+
+## Data-derived upgrade summary. The long description remains below; this short line makes
+## the immediate gameplay effect scannable when the shop is opened mid-dig.
+func _upgrade_effect_summary(up: Dictionary) -> String:
+	var effect: String = str(up.get("effect", ""))
+	var magnitude: float = float(up.get("magnitude", 0.0))
+	match effect:
+		"shaft_width_reduction":
+			return "%+d clearance cells needed" % int(magnitude)
+		_:
+			return "%s %+0.2f" % [effect.capitalize(), magnitude]
 
 
 func _build_odds_rows(weights: Dictionary) -> Array:

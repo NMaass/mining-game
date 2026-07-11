@@ -8,114 +8,142 @@
     "mass": 1.0,
     "bounce": 0.3,
     "friction": 0.7,
-    "base_impulse": 160.0,
+    "base_impulse": 170.0,
     "detonation_mode": "on_first_impact",
     "fuse_seconds": 0.0,
     "sticky": false,
     "blast_radius_cells": 2,
-    "blast_intensity": 25,
-    "blast_falloff": [1.0, 0.55, 0.35]
+    "blast_intensity": 32,
+    "blast_falloff": [
+      1.0,
+      0.55,
+      0.35
+    ]
   },
   "dynamite": {
     "display_name": "Dynamite",
     "tier": 1,
     "rarity": "common",
     "free": false,
-    "efficiency": 2.0,
+    "efficiency": 2.35,
     "mass": 1.5,
     "bounce": 0.35,
     "friction": 0.6,
-    "base_impulse": 140.0,
+    "base_impulse": 155.0,
     "detonation_mode": "fuse_seconds",
     "fuse_seconds": 1.2,
     "sticky": false,
     "blast_radius_cells": 2,
-    "blast_intensity": 80,
-    "blast_falloff": [1.0, 0.6, 0.25]
+    "blast_intensity": 92,
+    "blast_falloff": [
+      1.0,
+      0.6,
+      0.25
+    ]
   },
   "charge_sticky": {
     "display_name": "Sticky Charge",
     "tier": 2,
     "rarity": "uncommon",
     "free": false,
-    "efficiency": 2.6,
+    "efficiency": 3.05,
     "mass": 0.8,
     "bounce": 0.1,
     "friction": 0.9,
-    "base_impulse": 175.0,
+    "base_impulse": 185.0,
     "detonation_mode": "on_rest",
-    "fuse_seconds": 1.0,
+    "fuse_seconds": 0.85,
     "sticky": true,
     "blast_radius_cells": 2,
-    "blast_intensity": 110,
-    "blast_falloff": [1.0, 0.7, 0.4]
+    "blast_intensity": 124,
+    "blast_falloff": [
+      1.0,
+      0.7,
+      0.4
+    ]
   },
   "heavy_bomb": {
     "display_name": "Heavy Bomb",
     "tier": 3,
     "rarity": "rare",
     "free": false,
-    "efficiency": 3.4,
+    "efficiency": 4.15,
     "mass": 1.6,
     "bounce": 0.2,
     "friction": 0.7,
-    "base_impulse": 230.0,
+    "base_impulse": 245.0,
     "detonation_mode": "on_first_impact",
     "fuse_seconds": 0.0,
     "sticky": false,
     "blast_radius_cells": 3,
-    "blast_intensity": 170,
-    "blast_falloff": [1.0, 0.75, 0.5, 0.25]
+    "blast_intensity": 195,
+    "blast_falloff": [
+      1.0,
+      0.75,
+      0.5,
+      0.25
+    ]
   },
   "cluster_bomb": {
     "display_name": "Cluster Bomb",
     "tier": 1,
     "rarity": "common",
     "free": false,
-    "efficiency": 1.8,
+    "efficiency": 2.7,
     "mass": 1.0,
     "bounce": 0.35,
     "friction": 0.6,
-    "base_impulse": 200.0,
+    "base_impulse": 215.0,
     "detonation_mode": "fuse_seconds",
     "fuse_seconds": 1.0,
     "sticky": false,
     "blast_radius_cells": 2,
-    "blast_intensity": 60,
-    "blast_falloff": [1.0, 0.55, 0.2]
+    "blast_intensity": 82,
+    "blast_falloff": [
+      1.0,
+      0.55,
+      0.2
+    ]
   },
   "pile_driver": {
     "display_name": "Pile Driver",
     "tier": 3,
     "rarity": "rare",
     "free": false,
-    "efficiency": 3.8,
+    "efficiency": 4.6,
     "mass": 2.0,
     "bounce": 0.05,
     "friction": 0.8,
-    "base_impulse": 270.0,
+    "base_impulse": 285.0,
     "detonation_mode": "on_first_impact",
     "fuse_seconds": 0.0,
     "sticky": false,
     "blast_radius_cells": 1,
-    "blast_intensity": 240,
-    "blast_falloff": [1.0, 0.45]
+    "blast_intensity": 275,
+    "blast_falloff": [
+      1.0,
+      0.45
+    ]
   },
   "drill_charge": {
     "display_name": "Drill Charge",
     "tier": 2,
     "rarity": "uncommon",
     "free": false,
-    "efficiency": 2.8,
+    "efficiency": 3.45,
     "mass": 0.9,
     "bounce": 0.1,
     "friction": 0.7,
-    "base_impulse": 185.0,
+    "base_impulse": 200.0,
     "detonation_mode": "on_rest",
-    "fuse_seconds": 0.6,
+    "fuse_seconds": 0.5,
     "sticky": true,
     "blast_radius_cells": 2,
-    "blast_intensity": 130,
-    "blast_falloff": [1.0, 0.7, 0.4]
+    "blast_intensity": 150,
+    "blast_falloff": [
+      1.0,
+      0.7,
+      0.4
+    ]
   }
 }
