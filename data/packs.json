@@ -17,32 +17,33 @@
   },
   "basic": {
     "display_name": "Rusty Crate",
-    "price": 50,
+    "price": 45,
     "charge_count": 5,
     "weights": {
-      "dynamite": 70,
-      "charge_sticky": 25,
-      "heavy_bomb": 5
+      "dynamite": 78,
+      "charge_sticky": 18,
+      "heavy_bomb": 4
     }
   },
   "deep": {
     "display_name": "Deep Pack",
-    "price": 140,
+    "price": 125,
     "charge_count": 6,
     "weights": {
-      "dynamite": 40,
-      "charge_sticky": 40,
-      "heavy_bomb": 20
+      "dynamite": 25,
+      "charge_sticky": 45,
+      "heavy_bomb": 25,
+      "drill_charge": 5
     }
   },
   "heavy_crate": {
     "display_name": "Heavy Crate",
-    "price": 260,
+    "price": 220,
     "charge_count": 4,
     "weights": {
-      "cluster_bomb": 45,
-      "drill_charge": 35,
-      "pile_driver": 20
+      "cluster_bomb": 38,
+      "drill_charge": 38,
+      "pile_driver": 24
     }
   }
 }

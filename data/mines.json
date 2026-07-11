@@ -11,10 +11,10 @@
   },
   "deep": {
     "display_name": "Deep Mine",
-    "description": "Harder rock and a darker cut — but the ore is worth far more.",
-    "access_cost": 200,
+    "description": "Harder rock and a darker cut \u2014 but the ore is worth far more.",
+    "access_cost": 160,
     "hardness_mult": 2.0,
-    "ore_value_mult": 3.0,
+    "ore_value_mult": 3.4,
     "tile_tint": "#8b93ab",
     "seed_offset": 104729,
     "relic_name": "Obsidian Relic"

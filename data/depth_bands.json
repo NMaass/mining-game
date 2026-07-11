@@ -1,16 +1,16 @@
 {
   "sky_band_cells": 40,
   "surface_depth_cells": 0,
-  "cap_depth_cells": 10000,
+  "cap_depth_cells": 8000,
   "curve": "smoothstep",
-  "hud_sample_band_cells": 40,
+  "hud_sample_band_cells": 30,
   "surface_weights": {
-    "dirt": 70,
-    "rock": 28,
-    "hard_rock": 2
+    "dirt": 58,
+    "rock": 34,
+    "hard_rock": 8
   },
   "cap_weights": {
-    "rock": 30,
-    "hard_rock": 70
+    "rock": 22,
+    "hard_rock": 78
   }
 }
